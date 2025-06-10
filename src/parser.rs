@@ -19,48 +19,123 @@ impl ParseError {
 }
 
 pub fn parse_value(input: &str) -> Result<String, ParseError> {
-    // if the value is a digit is is a bencoded string
-    if input.chars().next().unwrap().is_ascii_digit() {
-        let colon_pos = input
-            .find(':')
-            .ok_or_else(|| ParseError::new("Missing colon in string encoding"))?;
+    match input.chars().next().unwrap() {
+        '0'..='9' => {
+            let colon_pos = input
+                .find(':')
+                .ok_or_else(|| ParseError::new("Missing colon in string encoding"))?;
 
-        let enc_str_len = &input[..colon_pos]
-            .parse::<usize>()
-            .map_err(|_| ParseError::new("Invalid string length"))?;
+            let enc_str_len = &input[..colon_pos]
+                .parse::<usize>()
+                .map_err(|_| ParseError::new("Invalid string length"))?;
 
-        if colon_pos + 1 + enc_str_len > input.len() {
-            return Err(ParseError::new("String length exceeds input"));
+            if colon_pos + 1 + enc_str_len > input.len() {
+                return Err(ParseError::new("String length exceeds input"));
+            }
+
+            let output = &input[colon_pos + 1..colon_pos + 1 + enc_str_len];
+            // consider using serde for this but will try to serialize manually for now
+            Ok(format!("\"{}\"", output))
         }
+        'i' => {
+            let end_pos = input
+                .find('e')
+                .ok_or_else(|| ParseError::new("Missing 'e' in integer encoding"))?;
 
-        let output = &input[colon_pos + 1..colon_pos + 1 + enc_str_len];
-        // consider using serde for this but will try to serialize manually for now
-        Ok(format!("\"{}\"", output))
-    } else if input.starts_with('i') {
-        let end_pos = input
-            .find('e')
-            .ok_or_else(|| ParseError::new("Missing 'e' in integer encoding"))?;
+            let output = &input[1..end_pos];
 
-        let output = &input[1..end_pos];
+            // This is what the official spec says so we are gonna return
+            // them as errors:
+            // i-0e is invalid. All encodings with a leading zero, such as
+            // i03e, are invalid, other than i0e, which of course corresponds
+            // to 0.
+            if output.starts_with("-0") {
+                return Err(ParseError::new("Invalid encoding: i-0e"));
+            } else if output.starts_with("0") && output != "0" {
+                return Err(ParseError::new(
+                    "Invalid encoding, leading zeros not allowed",
+                ));
+            }
 
-        // This is what the official spec says so we are gonna return
-        // them as errors:
-        // i-0e is invalid. All encodings with a leading zero, such as
-        // i03e, are invalid, other than i0e, which of course corresponds
-        // to 0.
-        if output.starts_with("-0") {
-            return Err(ParseError::new("Invalid encoding: i-0e"));
-        } else if output.starts_with("0") && output != "0" {
-            return Err(ParseError::new(
-                "Invalid encoding, leading zeros not allowed",
-            ));
+            Ok(output.to_string())
         }
+        'l' => {
+            let mut pos = 1;
+            let mut elements = Vec::new();
 
-        Ok(output.to_string())
-    } else if input.starts_with('l') {
-        unimplemented!();
-    } else {
-        unimplemented!();
+            while pos < input.len() {
+                // end of list
+                if input.chars().nth(pos).unwrap() == 'e' {
+                    let result = format!("[{}]", elements.join(","));
+                    return Ok(result);
+                }
+
+                // find the end of next element to parse it
+                let element_end = find_element_end(&input[pos..])?;
+                let element_input = &input[pos..pos + element_end];
+
+                // recursively parse the element
+                let parsed_element = parse_value(element_input)?;
+                elements.push(parsed_element);
+                pos += element_end;
+            }
+
+            Err(ParseError::new("Missing 'e' at end of list"))
+        }
+        'd' => {
+            unimplemented!()
+        }
+        _ => Err(ParseError::new("Not a valid prefix")),
+    }
+}
+
+fn find_element_end(input: &str) -> Result<usize, ParseError> {
+    match input.chars().next().unwrap() {
+        '0'..='9' => {
+            // String: find colon, read length, skip that many chars
+            let colon_pos = input
+                .find(':')
+                .ok_or_else(|| ParseError::new("Missing colon"))?;
+            let length = input[..colon_pos]
+                .parse::<usize>()
+                .map_err(|_| ParseError::new("Invalid length"))?;
+            Ok(colon_pos + 1 + length)
+        }
+        'i' => {
+            // Integer: find the 'e'
+            let end_pos = input
+                .find('e')
+                .ok_or_else(|| ParseError::new("Missing 'e'"))?;
+            Ok(end_pos + 1)
+        }
+        'l' => {
+            // List: count nested brackets
+            let mut pos = 1;
+            let mut depth = 1;
+            while pos < input.len() && depth > 0 {
+                match input.chars().nth(pos).unwrap() {
+                    'l' => depth += 1,
+                    'e' => depth -= 1,
+                    '0'..='9' => {
+                        // Skip over string content
+                        let colon_pos = input[pos..].find(':').unwrap() + pos;
+                        let length = input[pos..colon_pos].parse::<usize>().unwrap();
+                        pos = colon_pos + 1 + length;
+                        continue;
+                    }
+                    'i' => {
+                        // Skip to end of integer
+                        pos = input[pos..].find('e').unwrap() + pos + 1;
+                        continue;
+                    }
+                    _ => {}
+                }
+                pos += 1;
+            }
+            Ok(pos)
+        }
+        'd' => unimplemented!(), // Dictionary handling
+        _ => Err(ParseError::new("Invalid element type")),
     }
 }
 
@@ -98,5 +173,27 @@ mod test {
 
         // just a zero is just a zero
         assert_eq!(parse_value("i0e").unwrap(), "0");
+    }
+
+    #[test]
+    fn test_parse_list() {
+        assert_eq!(
+            parse_value("l4:spam4:eggse").unwrap(),
+            "[\"spam\",\"eggs\"]"
+        );
+
+        assert_eq!(
+            parse_value("l9:iloverusti-69ee").unwrap(),
+            "[\"iloverust\",-69]"
+        );
+        // empty list
+        assert_eq!(parse_value("le").unwrap(), "[]");
+        // no e at end should throw error
+        assert!(parse_value("l4:spam4:eggs").is_err());
+        // nested lists
+        assert_eq!(
+            parse_value("l9:iloverustl4:spam4:eggsee").unwrap(),
+            "[\"iloverust\",[\"spam\",\"eggs\"]]"
+        );
     }
 }
