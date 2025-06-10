@@ -83,7 +83,38 @@ pub fn parse_value(input: &str) -> Result<String, ParseError> {
             Err(ParseError::new("Missing 'e' at end of list"))
         }
         'd' => {
-            unimplemented!()
+            let mut pos = 1;
+            let mut elements = Vec::new();
+
+            while pos < input.len() {
+                // end of this dict
+                if input.chars().nth(pos).unwrap() == 'e' {
+                    let result = format!(
+                        "{{{}}}",
+                        elements
+                            .iter()
+                            .map(|(left, right)| format!("{left}:{right}"))
+                            .collect::<Vec<_>>()
+                            .join(",")
+                    );
+                    return Ok(result);
+                }
+
+                // parse the left and right element
+                let element_end = find_element_end(&input[pos..])?;
+                let element_input = &input[pos..pos + element_end];
+                let left_element = parse_value(element_input)?;
+                pos += element_end;
+
+                let element_end = find_element_end(&input[pos..])?;
+                let element_input = &input[pos..pos + element_end];
+                let right_element = parse_value(element_input)?;
+                pos += element_end;
+
+                elements.push((left_element, right_element));
+            }
+
+            Err(ParseError::new("Missing 'e' at end of this dict"))
         }
         _ => Err(ParseError::new("Not a valid prefix")),
     }
@@ -194,6 +225,14 @@ mod test {
         assert_eq!(
             parse_value("l9:iloverustl4:spam4:eggsee").unwrap(),
             "[\"iloverust\",[\"spam\",\"eggs\"]]"
+        );
+    }
+
+    #[test]
+    fn test_parse_this_dict() {
+        assert_eq!(
+            parse_value("d3:foo3:bar5:helloi52ee").unwrap(),
+            r#"{"foo":"bar","hello":52}"#
         );
     }
 }
