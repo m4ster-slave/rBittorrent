@@ -165,7 +165,34 @@ fn find_element_end(input: &str) -> Result<usize, ParseError> {
             }
             Ok(pos)
         }
-        'd' => unimplemented!(), // Dictionary handling
+        'd' => {
+            // List: count nested brackets
+            let mut pos = 1;
+            let mut depth = 1;
+            while pos < input.len() && depth > 0 {
+                match input.chars().nth(pos).unwrap() {
+                    'l' => depth += 1,
+                    'd' => depth += 1,
+                    'e' => depth -= 1,
+                    '0'..='9' => {
+                        // Skip over string content
+                        let colon_pos = input[pos..].find(':').unwrap() + pos;
+                        let length = input[pos..colon_pos].parse::<usize>().unwrap();
+                        pos = colon_pos + 1 + length;
+                        continue;
+                    }
+                    'i' => {
+                        // Skip to end of integer
+                        pos = input[pos..].find('e').unwrap() + pos + 1;
+                        continue;
+                    }
+
+                    _ => {}
+                }
+                pos += 1;
+            }
+            Ok(pos)
+        }
         _ => Err(ParseError::new("Invalid element type")),
     }
 }
