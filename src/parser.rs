@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use serde_bencode::de;
 use serde_bencode::ser;
 use sha1::{Digest, Sha1};
+use std::error::Error;
 use std::fmt::Display;
 use std::fs::File;
 use std::io::Read;
@@ -77,15 +78,46 @@ pub fn calculate_info_hash(info_dict: &Info) -> Result<String, Box<dyn std::erro
     Ok(hex::encode(result))
 }
 
+#[derive(Debug)]
+pub enum PiecesError {
+    InvalidLength,
+}
+
+impl Display for PiecesError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PiecesError::InvalidLength => write!(f, "`pieces` length is not a multiple of 20"),
+        }
+    }
+}
+
+impl Error for PiecesError {}
+
+pub fn get_pieces_hashes(info_dict: &Info) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    // check if info hash is a multiple of 20
+    if info_dict.pieces.len() % 20 != 0 {
+        return Err(Box::new(PiecesError::InvalidLength));
+    }
+
+    let mut result = Vec::new();
+
+    for i in 0..info_dict.pieces.len() / 20 {
+        let bencoded_piece = &info_dict.pieces[i * 20..i * 20 + 20];
+        result.push(hex::encode(bencoded_piece));
+    }
+    Ok(result)
+}
+
 impl Display for Torrent {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "Tracker URL: {}\nLength: {:?}\nInfo Hash {}\nPiece Length: {}\nPiece Hashes: ",
+            "Tracker URL: {}\nLength: {:?}\nInfo Hash {}\nPiece Length: {}\nPiece Hashes: \n{}",
             self.announce,
             self.info.file_tree,
             calculate_info_hash(&self.info).unwrap(),
-            self.info.piece_length
+            self.info.piece_length,
+            get_pieces_hashes(&self.info).unwrap().join("\n")
         )
     }
 }
