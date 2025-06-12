@@ -8,6 +8,7 @@ use std::fmt::Display;
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
+use url::form_urlencoded;
 
 #[derive(Debug, Deserialize)]
 /// Metainfo files (also known as .torrent files)
@@ -76,6 +77,18 @@ pub fn calculate_info_hash(info_dict: &Info) -> Result<String, Box<dyn std::erro
     hasher.update(&bencoded_info_dict);
     let result = hasher.finalize();
     Ok(hex::encode(result))
+}
+
+pub fn calculate_urlencoded_info_hash(
+    info_dict: &Info,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let bencoded_info_dict = ser::to_bytes(info_dict)?;
+    let mut hasher = Sha1::new();
+    hasher.update(&bencoded_info_dict);
+    let result = hasher.finalize();
+
+    let url_encoded_infohash = form_urlencoded::byte_serialize(&result).collect::<String>();
+    Ok(url_encoded_infohash)
 }
 
 #[derive(Debug)]
