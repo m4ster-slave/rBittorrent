@@ -1,9 +1,9 @@
-use std::net::Ipv4Addr;
-
 use serde::Deserialize;
 use serde_bencode::de;
+use std::net::{Ipv4Addr, SocketAddrV4};
 
 use crate::parser::{calculate_urlencoded_info_hash, Torrent};
+use crate::peer_connection::Peer;
 
 pub struct PeerDiscovery {
     announce_url: String,
@@ -33,12 +33,6 @@ pub struct PeerResponse {
     /// list of dictionaries corresponding to peers, each of which contains the keys peer id, ip,
     /// and port, which map to the peer's self-selected ID, IP address or dns name as a string, and
     pub peers: Vec<Peer>,
-}
-
-#[derive(Debug)]
-pub struct Peer {
-    pub port: u16,
-    pub ip: Ipv4Addr,
 }
 
 impl PeerDiscovery {
@@ -84,8 +78,9 @@ impl PeerDiscovery {
             let p2 = peer[5] as u16;
             let port = (p1 << 8) | p2;
             let ip = Ipv4Addr::new(peer[0], peer[1], peer[2], peer[3]);
+            let sock_ip = SocketAddrV4::new(ip, port);
 
-            peers.push(Peer { port, ip });
+            peers.push(Peer { sock_ip });
         }
 
         Ok(PeerResponse {

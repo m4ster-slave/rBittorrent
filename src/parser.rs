@@ -10,7 +10,7 @@ use std::io::Read;
 use std::path::Path;
 use url::form_urlencoded;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 /// Metainfo files (also known as .torrent files)
 pub struct Torrent {
     /// The URL of the tracker.
@@ -23,7 +23,7 @@ pub struct Torrent {
     pub encoding: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Info {
     /// A display name for the torrent. It is purely advisory.
     pub name: String,
@@ -42,7 +42,7 @@ pub struct Info {
     pub file_tree: FileTree,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(untagged)]
 pub enum FileTree {
     /// single file with `Torrent.name` as name
@@ -55,7 +55,7 @@ pub enum FileTree {
     MultiFile { files: Vec<FileInfo> },
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct FileInfo {
     /// Length of the file in bytes.
     pub length: usize,
@@ -77,6 +77,13 @@ pub fn calculate_info_hash(info_dict: &Info) -> Result<String, Box<dyn std::erro
     hasher.update(&bencoded_info_dict);
     let result = hasher.finalize();
     Ok(hex::encode(result))
+}
+
+pub fn calculate_info_hash_bytes(info_dict: &Info) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let bencoded_info_dict = ser::to_bytes(info_dict)?;
+    let mut hasher = Sha1::new();
+    hasher.update(&bencoded_info_dict);
+    Ok(hasher.finalize().to_vec())
 }
 
 pub fn calculate_urlencoded_info_hash(
