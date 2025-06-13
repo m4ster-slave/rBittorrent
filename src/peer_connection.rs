@@ -27,6 +27,7 @@ pub struct Peer {
 // zero_bytes: [u8; 8],
 // infohash: [u8; 20],
 // peer_id: [u8; 20],
+// TODO: Make this a struct and read the direct memory into a buffer
 fn generate_handshake(infohash: &[u8]) -> Vec<u8> {
     let mut handshake: Vec<u8> = Vec::new();
     handshake.push(19);
@@ -35,6 +36,12 @@ fn generate_handshake(infohash: &[u8]) -> Vec<u8> {
     handshake.extend_from_slice(&infohash[0..20]);
     handshake.extend_from_slice("00112233445566778899".as_bytes());
     handshake
+}
+
+struct PeerMessage {
+    length: u64,
+    message_id: u8,
+    payload: Vec<u8>,
 }
 
 impl Peer {
@@ -46,6 +53,24 @@ impl Peer {
 
         let mut buf = vec![0u8; 68];
         stream.read_exact(&mut buf)?;
+
+        let mut len_buf = [0u8; 4];
+        stream.read_exact(&mut len_buf)?;
+        let msg_len = u32::from_be_bytes(len_buf);
+
+        if msg_len == 0 {
+            println!("Received keep-alive");
+            return Ok(hex::encode(&buf[47..68]));
+        }
+
+        let mut msg_buf = vec![0u8; msg_len as usize];
+        stream.read_exact(&mut msg_buf)?;
+
+        let message_id = msg_buf[0];
+        let payload = msg_buf[1..].to_vec();
+
+        println!("Message ID: {}", message_id);
+        println!("Payload: {:?}", payload);
 
         Ok(hex::encode(&buf[47..68]))
     }
