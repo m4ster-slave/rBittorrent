@@ -1,5 +1,8 @@
-use crate::tracker::PeerDiscovery;
+use std::{fs::File, io::Write};
 
+use crate::{downloader::Downloader, tracker::PeerDiscovery};
+
+mod downloader;
 mod parser;
 mod peer_connection;
 mod tracker;
@@ -7,23 +10,16 @@ mod tracker;
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let file = &args[1];
-    let torrent_file = parser::parse_torrent_file(file).unwrap();
+    let torrent = parser::parse_torrent_file(file).unwrap();
+    let file_name = torrent.info.name.clone();
 
     // parse the .torrent file
-    println!("{}:\n{}", file, torrent_file);
+    println!("{}:\n{}", file, torrent);
 
-    let mut discoverer = PeerDiscovery::new("Lukiana", 6969, torrent_file.clone());
-    loop {
-        println!("Discovery requests: ");
-        let peers = discoverer.discover().unwrap();
-        let peer = peers.peers.first().unwrap();
-        print!("{}\t", peer.sock_ip);
-        // println!("PIECE {:?}", peer.get_piece(&torrent_file.info).unwrap());
-        peer.get_piece(&torrent_file.info).unwrap();
-        // println!(
-        //     "Waiting for specified interval by the Tracker({}s)",
-        //     peers.interval
-        // );
-        // thread::sleep(time::Duration::from_secs(peers.interval as u64));
-    }
+    let discoverer = PeerDiscovery::new("Lukiana", 6969, torrent.clone());
+    let mut downloader = Downloader::new(discoverer, torrent);
+    downloader.download();
+
+    let mut out_file = File::create_new(file_name).unwrap();
+    out_file.write_all(&downloader.file_buffer).unwrap();
 }

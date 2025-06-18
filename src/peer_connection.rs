@@ -7,7 +7,7 @@ use std::{
 
 use sha1::{Digest, Sha1};
 
-use crate::parser::{calculate_info_hash_bytes, Info};
+use crate::parser::{calculate_info_hash_bytes, FileTree, Info};
 /// Peer connections are symmetrical. Messages sent in both directions look the same, and data can
 /// flow in either direction.
 ///
@@ -82,41 +82,45 @@ fn download_piece(
 
     while received_bytes < piece_length {
         // read length prefix
-        stream.read_exact(&mut u32_buf)?;
+        stream.read_exact(&mut u32_buf).unwrap();
         let msg_len = u32::from_be_bytes(u32_buf);
 
-        // read message id
-        let mut msg_id_buf = [0u8; 1];
-        stream.read_exact(&mut msg_id_buf)?;
-        let msg_id = msg_id_buf[0];
-        println!("message id when trying to get blocks {}", msg_id);
+        if msg_len == 0 {
+            println!("Received keep-alive");
+            continue;
+        }
 
-        if msg_id == 7 {
-            // piece message
+        let mut msg_buf = vec![0u8; msg_len as usize];
+        stream.read_exact(&mut msg_buf).unwrap();
 
-            println!("message length with block: {}", msg_len);
-            stream.read_exact(&mut u32_buf)?;
-            let index = u32::from_be_bytes(u32_buf);
-            stream.read_exact(&mut u32_buf)?;
-            let begin = u32::from_be_bytes(u32_buf);
-            let block_len = msg_len as usize - 9; // 4 (index) + 4 (begin) + 1 (msg id)
+        let msg_id = msg_buf[0];
+        let payload = &msg_buf[1..];
 
-            let mut block_buf = vec![0u8; block_len];
-            stream.read_exact(&mut block_buf)?;
+        match msg_id {
+            7 => {
+                // piece message
+                let index = u32::from_be_bytes(payload[0..4].try_into().unwrap());
+                let begin = u32::from_be_bytes(payload[4..8].try_into().unwrap());
+                let block_data = &payload[8..];
 
-            // Sanity check
-            assert_eq!(index, piece_index);
+                // Sanity check
+                assert_eq!(index, piece_index);
 
-            // insert block into piece buffer
-            let offset = begin as usize;
-            piece_buffer[offset..offset + block_len].copy_from_slice(&block_buf);
+                // insert block into piece buffer
+                let offset = begin as usize;
+                piece_buffer[offset..offset + block_data.len()].copy_from_slice(block_data);
 
-            received_bytes += block_len;
-        } else if msg_id == 0 {
-            // skip choke
-            thread::sleep(Duration::new(0, 100_000)); // wait 100ms
-        } else {
-            // TODO handle other types
+                received_bytes += block_data.len();
+            }
+            0 => {
+                // skip choke
+                thread::sleep(Duration::new(0, 100_000)); // wait 100ms
+            }
+            _ => {
+                // TODO handle other types
+                // skip for now
+                thread::sleep(Duration::new(0, 100_000));
+            }
         }
     }
 
@@ -138,7 +142,11 @@ impl std::fmt::Display for PieceHashMismatchError {
 impl std::error::Error for PieceHashMismatchError {}
 
 impl Peer {
-    pub fn get_piece(&self, info_dict: &Info) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    pub fn get_piece(
+        &self,
+        info_dict: &Info,
+        index: usize,
+    ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
         // all messages follow <length prefix: 4 bytes><message ID: 1 byte><optional payload>
 
         // Step 1
@@ -202,12 +210,29 @@ impl Peer {
 
         // Step 5 & 6
         // send request messages and wait for piece messages putting all together
-        let piece = download_piece(&mut stream, 0, info_dict.piece_length)?;
+
+        // calculate correct piece size
+        let total_pieces = info_dict.pieces.len() / 20;
+        let total_length = match &info_dict.file_tree {
+            FileTree::SingleFile { length } => length,
+            FileTree::MultiFile { .. } => {
+                unimplemented!()
+            }
+        };
+
+        let piece_length = if index + 1 == total_pieces {
+            total_length - (index * info_dict.piece_length)
+        } else {
+            info_dict.piece_length
+        };
+
+        println!("Downloading piece with length {}", piece_length);
+        let piece = download_piece(&mut stream, index as u32, piece_length)?;
 
         // compare hash of piece with the hash in the info dict
         let mut hasher = Sha1::new();
         hasher.update(&piece);
-        if hasher.finalize().to_vec() == info_dict.pieces[0..20] {
+        if hasher.finalize().to_vec() == info_dict.pieces[index * 20..index * 20 + 20] {
             Ok(piece)
         } else {
             Err(Box::new(PieceHashMismatchError))

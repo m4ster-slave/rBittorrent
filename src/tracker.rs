@@ -5,14 +5,15 @@ use std::net::{Ipv4Addr, SocketAddrV4};
 use crate::parser::{calculate_urlencoded_info_hash, Torrent};
 use crate::peer_connection::Peer;
 
+#[derive(Clone)]
 pub struct PeerDiscovery {
     announce_url: String,
     infohash: String,
     peer_id: String,
     port: u16,
     uploaded: usize,
-    downloaded: usize,
-    left: usize,
+    pub downloaded: usize,
+    pub left: usize,
     compact: usize,
 }
 
