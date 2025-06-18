@@ -16,10 +16,12 @@ pub struct Torrent {
     /// The URL of the tracker.
     pub announce: String,
     pub info: Info,
+    /// Purely informational
     pub comment: Option<String>,
     #[serde(rename(deserialize = "created by"))]
     pub created_by: Option<String>,
     pub creation_date: Option<i64>,
+    /// Indicates the character encoding used for string fields in the torrent
     pub encoding: Option<String>,
 }
 
@@ -35,23 +37,25 @@ pub struct Info {
     /// alignment gap.
     #[serde(rename(serialize = "piece length", deserialize = "piece length"))]
     pub piece_length: usize,
-    /// Each entry is the SHA1 hash of the piece at the corresponding index.
+    /// Each entry is the SHA1 hash of the piece at the corresponding index. Should be a multiple
+    /// of 20.
     #[serde(with = "serde_bytes")]
     pub pieces: Vec<u8>,
     #[serde(flatten)]
     pub file_tree: FileTree,
 }
 
+/// Distinguish between multi- and singlefile torrents as they need to be handles differently
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(untagged)]
 pub enum FileTree {
-    /// single file with `Torrent.name` as name
+    /// Single file with `Torrent.name` as name
     SingleFile {
         /// Length of the file in bytes. Presence of this field indicates that the dictionary
         /// describes a file, not a directory. Which means it must not have any sibling entries.
         length: usize,
     },
-    /// set of files that go in a directory structure
+    /// Set of files that go in a directory structure
     MultiFile { files: Vec<FileInfo> },
 }
 
@@ -63,6 +67,7 @@ pub struct FileInfo {
     pub path: Vec<String>,
 }
 
+// Parse the torretn file into a `Torrent` object
 pub fn parse_torrent_file<P: AsRef<Path>>(path: P) -> Result<Torrent, Box<dyn std::error::Error>> {
     let mut file = File::open(path)?;
     let mut buf = Vec::new();
@@ -71,14 +76,12 @@ pub fn parse_torrent_file<P: AsRef<Path>>(path: P) -> Result<Torrent, Box<dyn st
     Ok(torrent)
 }
 
+/// Calculate info hash as a hex encoded string
 pub fn calculate_info_hash(info_dict: &Info) -> Result<String, Box<dyn std::error::Error>> {
-    let bencoded_info_dict = ser::to_bytes(info_dict)?;
-    let mut hasher = Sha1::new();
-    hasher.update(&bencoded_info_dict);
-    let result = hasher.finalize();
-    Ok(hex::encode(result))
+    Ok(hex::encode(calculate_info_hash_bytes(info_dict)?))
 }
 
+/// Calculate info hash as raw bytes string
 pub fn calculate_info_hash_bytes(info_dict: &Info) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     let bencoded_info_dict = ser::to_bytes(info_dict)?;
     let mut hasher = Sha1::new();
@@ -86,15 +89,13 @@ pub fn calculate_info_hash_bytes(info_dict: &Info) -> Result<Vec<u8>, Box<dyn st
     Ok(hasher.finalize().to_vec())
 }
 
+// Calculate url encoded info hash
 pub fn calculate_urlencoded_info_hash(
     info_dict: &Info,
 ) -> Result<String, Box<dyn std::error::Error>> {
-    let bencoded_info_dict = ser::to_bytes(info_dict)?;
-    let mut hasher = Sha1::new();
-    hasher.update(&bencoded_info_dict);
-    let result = hasher.finalize();
+    let hashed_bytes = calculate_info_hash_bytes(info_dict)?;
+    let url_encoded_infohash = form_urlencoded::byte_serialize(&hashed_bytes).collect::<String>();
 
-    let url_encoded_infohash = form_urlencoded::byte_serialize(&result).collect::<String>();
     Ok(url_encoded_infohash)
 }
 
@@ -113,6 +114,7 @@ impl Display for PiecesError {
 
 impl Error for PiecesError {}
 
+/// Get the hash of each piece in the metainfo file
 pub fn get_pieces_hashes(info_dict: &Info) -> Result<Vec<String>, Box<dyn std::error::Error>> {
     // check if info hash is a multiple of 20
     if info_dict.pieces.len() % 20 != 0 {

@@ -1,23 +1,26 @@
-use crate::{parser::Torrent, tracker::PeerDiscovery};
+use crate::{discovery::PeerDiscoverer, parser::Torrent, peer_connection::Peer};
 
+/// Responsible for downloading the file
 pub struct Downloader {
-    discoverer: PeerDiscovery,
+    discoverer: PeerDiscoverer,
+    peers: Vec<Peer>,
     pub file_buffer: Vec<u8>,
     torrent: Torrent,
 }
 
 impl Downloader {
-    pub fn new(discoverer: PeerDiscovery, torrent: Torrent) -> Self {
+    pub fn new(discoverer: &PeerDiscoverer, torrent: Torrent) -> Self {
         Self {
             discoverer: discoverer.clone(),
+            peers: Vec::new(),
             file_buffer: Vec::new(),
             torrent,
         }
     }
 
     pub fn download(&mut self) {
-        let peers = self.discoverer.discover().unwrap();
-        let peer = peers.peers.first().unwrap();
+        self.peers = self.discoverer.discover().unwrap().peers;
+        let peer = self.peers.first().unwrap();
         print!("{}\t", peer.sock_ip);
 
         let total_pieces = self.torrent.info.pieces.len() / 20;

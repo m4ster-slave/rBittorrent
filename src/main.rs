@@ -1,25 +1,35 @@
+//! # rBittorrent
+//! Simple implementation of the BitTorrent protocoll in rust with minimal dependencies
+
 use std::{fs::File, io::Write};
 
-use crate::{downloader::Downloader, tracker::PeerDiscovery};
+use crate::{discovery::PeerDiscoverer, downloader::Downloader};
 
+mod discovery;
 mod downloader;
 mod parser;
 mod peer_connection;
-mod tracker;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let file = &args[1];
-    let torrent = parser::parse_torrent_file(file).unwrap();
-    let file_name = torrent.info.name.clone();
+    if args.len() < 2 {
+        println!("Error: Specify at least one torrent file");
+        println!("Usage: {} /path/to/file.torrent", args[0]);
+        return;
+    }
 
-    // parse the .torrent file
-    println!("{}:\n{}", file, torrent);
+    // download each torrent file
+    for file in &args[1..args.len()] {
+        let torrent = parser::parse_torrent_file(file).unwrap();
+        let file_name = torrent.info.name.clone();
 
-    let discoverer = PeerDiscovery::new("Lukiana", 6969, torrent.clone());
-    let mut downloader = Downloader::new(discoverer, torrent);
-    downloader.download();
+        println!("Downloading {}:\n{}", file, torrent);
 
-    let mut out_file = File::create_new(file_name).unwrap();
-    out_file.write_all(&downloader.file_buffer).unwrap();
+        let discoverer = PeerDiscoverer::new("rBittorrent", 6969, torrent.clone());
+        let mut downloader = Downloader::new(&discoverer, torrent);
+        downloader.download();
+
+        let mut out_file = File::create_new(file_name).unwrap();
+        out_file.write_all(&downloader.file_buffer).unwrap();
+    }
 }

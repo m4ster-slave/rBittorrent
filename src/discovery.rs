@@ -6,10 +6,10 @@ use crate::parser::{calculate_urlencoded_info_hash, Torrent};
 use crate::peer_connection::Peer;
 
 #[derive(Clone)]
-pub struct PeerDiscovery {
+pub struct PeerDiscoverer {
     announce_url: String,
     infohash: String,
-    peer_id: String,
+    peer_id: Vec<u8>,
     port: u16,
     uploaded: usize,
     pub downloaded: usize,
@@ -36,13 +36,23 @@ pub struct PeerResponse {
     pub peers: Vec<Peer>,
 }
 
-impl PeerDiscovery {
-    pub fn new(_peer_id: &str, port: u16, torrent: Torrent) -> Self {
+impl PeerDiscoverer {
+    pub fn new(peer_id: &str, port: u16, torrent: Torrent) -> Self {
+        let mut peer_id_bytes = peer_id.as_bytes();
+
+        if peer_id_bytes.len() > 20 {
+            eprintln!("Peer ID was too long, using default: 'defaultBittorrentclient'");
+            peer_id_bytes = b"defaultBittorrentclient";
+        }
+
+        let mut padded_peer_id = [0u8; 20];
+        let len = peer_id_bytes.len().min(20);
+        padded_peer_id[..len].copy_from_slice(&peer_id_bytes[..len]);
+
         Self {
             announce_url: torrent.announce,
             infohash: calculate_urlencoded_info_hash(&torrent.info).unwrap(),
-            // TODO be able to choose peer id
-            peer_id: "00112233445566778899".to_string(),
+            peer_id: padded_peer_id.to_vec(),
             port,
             uploaded: 0,
             downloaded: 0,
@@ -61,7 +71,7 @@ impl PeerDiscovery {
             "{}/?info_hash={}&peer_id={}&port={}&uploaded={}&downloaded={}&left={}&compact={}",
             self.announce_url,
             self.infohash,
-            self.peer_id,
+            String::from_utf8_lossy(&self.peer_id),
             self.port,
             self.uploaded,
             self.downloaded,
