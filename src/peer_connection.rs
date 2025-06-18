@@ -1,7 +1,11 @@
 use std::{
-    io::{Read, Write},
+    io::{self, Read, Write},
     net::{SocketAddrV4, TcpStream},
+    thread::{self},
+    time::Duration,
 };
+
+use sha1::{Digest, Sha1};
 
 use crate::parser::{calculate_info_hash_bytes, Info};
 /// Peer connections are symmetrical. Messages sent in both directions look the same, and data can
@@ -44,24 +48,121 @@ struct PeerMessage {
     payload: Vec<u8>,
 }
 
+fn download_piece(
+    stream: &mut TcpStream,
+    piece_index: u32,
+    piece_length: usize,
+) -> io::Result<Vec<u8>> {
+    let block_size = 16 * 1024;
+    let mut piece_buffer = vec![0u8; piece_length];
+
+    // send requests
+    for offset in (0..piece_length).step_by(block_size) {
+        let block_len = if offset + block_size > piece_length {
+            piece_length - offset
+        } else {
+            block_size
+        };
+
+        let mut request = Vec::with_capacity(13);
+        request.push(6); // request message id
+        request.extend_from_slice(&piece_index.to_be_bytes());
+        request.extend_from_slice(&(offset as u32).to_be_bytes());
+        request.extend_from_slice(&(block_len as u32).to_be_bytes());
+
+        // write request length prefix + message
+        let mut full_request = Vec::new();
+        full_request.extend_from_slice(&(request.len() as u32).to_be_bytes());
+        full_request.extend_from_slice(&request);
+        stream.write_all(&full_request)?;
+    }
+
+    let mut received_bytes = 0;
+    let mut u32_buf = [0u8; 4];
+
+    while received_bytes < piece_length {
+        // read length prefix
+        stream.read_exact(&mut u32_buf)?;
+        let msg_len = u32::from_be_bytes(u32_buf);
+
+        // read message id
+        let mut msg_id_buf = [0u8; 1];
+        stream.read_exact(&mut msg_id_buf)?;
+        let msg_id = msg_id_buf[0];
+        println!("message id when trying to get blocks {}", msg_id);
+
+        if msg_id == 7 {
+            // piece message
+
+            println!("message length with block: {}", msg_len);
+            stream.read_exact(&mut u32_buf)?;
+            let index = u32::from_be_bytes(u32_buf);
+            stream.read_exact(&mut u32_buf)?;
+            let begin = u32::from_be_bytes(u32_buf);
+            let block_len = msg_len as usize - 9; // 4 (index) + 4 (begin) + 1 (msg id)
+
+            let mut block_buf = vec![0u8; block_len];
+            stream.read_exact(&mut block_buf)?;
+
+            // Sanity check
+            assert_eq!(index, piece_index);
+
+            // insert block into piece buffer
+            let offset = begin as usize;
+            piece_buffer[offset..offset + block_len].copy_from_slice(&block_buf);
+
+            received_bytes += block_len;
+        } else if msg_id == 0 {
+            // skip choke
+            thread::sleep(Duration::new(0, 100_000)); // wait 100ms
+        } else {
+            // TODO handle other types
+        }
+    }
+
+    Ok(piece_buffer)
+}
+
+#[derive(Debug)]
+struct PieceHashMismatchError;
+
+impl std::fmt::Display for PieceHashMismatchError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "The received piece hash doesn't match the hash in the file"
+        )
+    }
+}
+
+impl std::error::Error for PieceHashMismatchError {}
+
 impl Peer {
-    pub fn send_handshake(&self, info_dict: &Info) -> Result<String, Box<dyn std::error::Error>> {
+    pub fn get_piece(&self, info_dict: &Info) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+        // all messages follow <length prefix: 4 bytes><message ID: 1 byte><optional payload>
+
+        // Step 1
+        // perform handshake
         let infohash = calculate_info_hash_bytes(info_dict)?;
         let handshake = generate_handshake(&infohash);
         let mut stream = TcpStream::connect(self.sock_ip)?;
         let _ = stream.write(&handshake)?;
 
+        // Step 2
+        // read bitfield packaged
+        //
+        // 'bitfield' is only ever sent as the first message. Its payload is a bitfield with each
+        // index that downloader has sent set to one and the rest set to zero. Downloaders which
+        // don't have anything yet may skip the 'bitfield' message. The first byte of the bitfield
+        // corresponds to indices 0 - 7 from high bit to low bit, respectively. The next one 8-15,
+        // etc. Spare bits at the end are set to zero.
         let mut buf = vec![0u8; 68];
         stream.read_exact(&mut buf)?;
 
+        // read in length first
         let mut len_buf = [0u8; 4];
         stream.read_exact(&mut len_buf)?;
         let msg_len = u32::from_be_bytes(len_buf);
-
-        if msg_len == 0 {
-            println!("Received keep-alive");
-            return Ok(hex::encode(&buf[47..68]));
-        }
 
         let mut msg_buf = vec![0u8; msg_len as usize];
         stream.read_exact(&mut msg_buf)?;
@@ -70,8 +171,46 @@ impl Peer {
         let payload = msg_buf[1..].to_vec();
 
         println!("Message ID: {}", message_id);
-        println!("Payload: {:?}", payload);
+        println!(
+            "bitfield: {:?}",
+            payload
+                .iter()
+                .map(|b| format!("{:08b}", b))
+                .collect::<Vec<_>>()
+        );
 
-        Ok(hex::encode(&buf[47..68]))
+        // Step 3
+        // send interested packaged
+        let mut msg_buf = Vec::new();
+        // length prefix: 1
+        msg_buf.extend_from_slice(&(1u32.to_be_bytes()));
+        msg_buf.push(2);
+        stream.write_all(&msg_buf)?;
+
+        // Step 4
+        // wait for unchoke message
+        let mut msg_buf: Vec<u8> = vec![0];
+        while msg_buf[0] != 1 {
+            stream.read_exact(&mut len_buf)?;
+            msg_buf = vec![0u8; u32::from_be_bytes(len_buf) as usize];
+            stream.read_exact(&mut msg_buf)?;
+            println!("waiting for unchoke message, got: {}", msg_buf[0]);
+            // sleep 100ms to not overload the network
+            thread::sleep(Duration::new(0, 100_000));
+        }
+        println!("Got unchoke message");
+
+        // Step 5 & 6
+        // send request messages and wait for piece messages putting all together
+        let piece = download_piece(&mut stream, 0, info_dict.piece_length)?;
+
+        // compare hash of piece with the hash in the info dict
+        let mut hasher = Sha1::new();
+        hasher.update(&piece);
+        if hasher.finalize().to_vec() == info_dict.pieces[0..20] {
+            Ok(piece)
+        } else {
+            Err(Box::new(PieceHashMismatchError))
+        }
     }
 }

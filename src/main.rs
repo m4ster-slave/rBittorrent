@@ -1,5 +1,3 @@
-use std::{thread, time};
-
 use crate::tracker::PeerDiscovery;
 
 mod parser;
@@ -18,17 +16,14 @@ fn main() {
     loop {
         println!("Discovery requests: ");
         let peers = discoverer.discover().unwrap();
-        for peer in peers.peers {
-            print!("{}\t", peer.sock_ip);
-            println!(
-                "handshake: {}",
-                peer.send_handshake(&torrent_file.info).unwrap()
-            );
-        }
-        println!(
-            "Waiting for specified interval by the Tracker({}s)",
-            peers.interval
-        );
-        thread::sleep(time::Duration::from_secs(peers.interval as u64));
+        let peer = peers.peers.first().unwrap();
+        print!("{}\t", peer.sock_ip);
+        // println!("PIECE {:?}", peer.get_piece(&torrent_file.info).unwrap());
+        peer.get_piece(&torrent_file.info).unwrap();
+        // println!(
+        //     "Waiting for specified interval by the Tracker({}s)",
+        //     peers.interval
+        // );
+        // thread::sleep(time::Duration::from_secs(peers.interval as u64));
     }
 }
