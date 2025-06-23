@@ -10,7 +10,8 @@ mod downloader;
 mod parser;
 mod peer_connection;
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 2 {
         println!("Error: Specify at least one torrent file");
@@ -25,9 +26,9 @@ fn main() {
 
         println!("Downloading {}:\n{}", file, torrent);
 
-        let discoverer = PeerDiscoverer::new("rBittorrent", 6969, torrent.clone());
+        let discoverer = PeerDiscoverer::new("rBittorrent", 6969, torrent.clone()).await;
         let mut downloader = Downloader::new(&discoverer, torrent);
-        downloader.download();
+        downloader.download().await;
 
         let mut out_file = File::create_new(file_name).unwrap();
         out_file.write_all(&downloader.file_buffer).unwrap();

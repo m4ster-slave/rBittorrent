@@ -37,7 +37,7 @@ pub struct PeerResponse {
 }
 
 impl PeerDiscoverer {
-    pub fn new(peer_id: &str, port: u16, torrent: Torrent) -> Self {
+    pub async fn new(peer_id: &str, port: u16, torrent: Torrent) -> Self {
         let mut peer_id_bytes = peer_id.as_bytes();
 
         if peer_id_bytes.len() > 20 {
@@ -66,7 +66,7 @@ impl PeerDiscoverer {
         }
     }
 
-    pub fn discover(&mut self) -> Result<PeerResponse, Box<dyn std::error::Error>> {
+    pub async fn discover(&mut self) -> Result<PeerResponse, Box<dyn std::error::Error>> {
         let url = format!(
             "{}/?info_hash={}&peer_id={}&port={}&uploaded={}&downloaded={}&left={}&compact={}",
             self.announce_url,
@@ -78,8 +78,8 @@ impl PeerDiscoverer {
             self.left,
             self.compact
         );
-        let resp = reqwest::blocking::get(url)?;
-        let body = resp.bytes()?;
+        let resp = reqwest::get(url).await?;
+        let body = resp.bytes().await?;
 
         let peer_response_ser: PeerResponseSer = de::from_bytes(&body)?;
 

@@ -5,9 +5,11 @@ edition = "2021"
 
 [dependencies]
 hex = "0.4.3"
-reqwest = {version = "0.12.20", features = ["blocking"]}
+reqwest = {version = "0.12.20"}
 serde = {version = "1.0.219", features = ["derive"]}
 serde_bencode = "0.2.4"
 serde_bytes = "0.11"
 sha1 = "0.10.6"
+# TODO: check which features we acc need
+tokio = {version = "1.45.1", features = ["full"]}
 url = "2.5.4"
