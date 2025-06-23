@@ -1,9 +1,8 @@
-#![allow(dead_code)]
+use anyhow::anyhow;
 use serde::{Deserialize, Serialize};
 use serde_bencode::de;
 use serde_bencode::ser;
 use sha1::{Digest, Sha1};
-use std::error::Error;
 use std::fmt::Display;
 use std::fs::File;
 use std::io::Read;
@@ -68,7 +67,7 @@ pub struct FileInfo {
 }
 
 // Parse the torretn file into a `Torrent` object
-pub fn parse_torrent_file<P: AsRef<Path>>(path: P) -> Result<Torrent, Box<dyn std::error::Error>> {
+pub fn parse_torrent_file<P: AsRef<Path>>(path: P) -> Result<Torrent, anyhow::Error> {
     let mut file = File::open(path)?;
     let mut buf = Vec::new();
     file.read_to_end(&mut buf)?;
@@ -77,12 +76,12 @@ pub fn parse_torrent_file<P: AsRef<Path>>(path: P) -> Result<Torrent, Box<dyn st
 }
 
 /// Calculate info hash as a hex encoded string
-pub fn calculate_info_hash(info_dict: &Info) -> Result<String, Box<dyn std::error::Error>> {
+pub fn calculate_info_hash(info_dict: &Info) -> Result<String, anyhow::Error> {
     Ok(hex::encode(calculate_info_hash_bytes(info_dict)?))
 }
 
 /// Calculate info hash as raw bytes string
-pub fn calculate_info_hash_bytes(info_dict: &Info) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+pub fn calculate_info_hash_bytes(info_dict: &Info) -> Result<Vec<u8>, anyhow::Error> {
     let bencoded_info_dict = ser::to_bytes(info_dict)?;
     let mut hasher = Sha1::new();
     hasher.update(&bencoded_info_dict);
@@ -90,35 +89,18 @@ pub fn calculate_info_hash_bytes(info_dict: &Info) -> Result<Vec<u8>, Box<dyn st
 }
 
 // Calculate url encoded info hash
-pub fn calculate_urlencoded_info_hash(
-    info_dict: &Info,
-) -> Result<String, Box<dyn std::error::Error>> {
+pub fn calculate_urlencoded_info_hash(info_dict: &Info) -> Result<String, anyhow::Error> {
     let hashed_bytes = calculate_info_hash_bytes(info_dict)?;
     let url_encoded_infohash = form_urlencoded::byte_serialize(&hashed_bytes).collect::<String>();
 
     Ok(url_encoded_infohash)
 }
 
-#[derive(Debug)]
-pub enum PiecesError {
-    InvalidLength,
-}
-
-impl Display for PiecesError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            PiecesError::InvalidLength => write!(f, "`pieces` length is not a multiple of 20"),
-        }
-    }
-}
-
-impl Error for PiecesError {}
-
 /// Get the hash of each piece in the metainfo file
-pub fn get_pieces_hashes(info_dict: &Info) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+pub fn get_pieces_hashes(info_dict: &Info) -> Result<Vec<String>, anyhow::Error> {
     // check if info hash is a multiple of 20
     if info_dict.pieces.len() % 20 != 0 {
-        return Err(Box::new(PiecesError::InvalidLength));
+        return Err(anyhow!("`pieces` length is not a multiple of 20"));
     }
 
     let mut result = Vec::new();

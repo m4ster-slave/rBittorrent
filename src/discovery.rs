@@ -66,7 +66,7 @@ impl PeerDiscoverer {
         }
     }
 
-    pub async fn discover(&mut self) -> Result<PeerResponse, Box<dyn std::error::Error>> {
+    pub async fn discover(&mut self) -> Result<PeerResponse, anyhow::Error> {
         let url = format!(
             "{}/?info_hash={}&peer_id={}&port={}&uploaded={}&downloaded={}&left={}&compact={}",
             self.announce_url,
@@ -91,7 +91,10 @@ impl PeerDiscoverer {
             let ip = Ipv4Addr::new(peer[0], peer[1], peer[2], peer[3]);
             let sock_ip = SocketAddrV4::new(ip, port);
 
-            peers.push(Peer { sock_ip });
+            peers.push(Peer {
+                sock_ip,
+                available: Vec::new(),
+            });
         }
 
         Ok(PeerResponse {
