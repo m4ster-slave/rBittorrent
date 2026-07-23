@@ -66,7 +66,8 @@ impl PeerDiscoverer {
         }
     }
 
-    pub async fn discover(&mut self) -> Result<PeerResponse, anyhow::Error> {
+    /// function to disvoer your peers, after a new peer is discovered we get its handshake
+    pub async fn discover(&mut self, torrent: &Torrent) -> Result<PeerResponse, anyhow::Error> {
         let url = format!(
             "{}/?info_hash={}&peer_id={}&port={}&uploaded={}&downloaded={}&left={}&compact={}",
             self.announce_url,
@@ -94,7 +95,12 @@ impl PeerDiscoverer {
             peers.push(Peer {
                 sock_ip,
                 available: Vec::new(),
+                conn: None,
             });
+        }
+
+        for peer in peers.iter_mut() {
+            peer.perform_handshake(&torrent.info).await?;
         }
 
         Ok(PeerResponse {

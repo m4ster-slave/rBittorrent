@@ -1,7 +1,5 @@
 use anyhow::anyhow;
 use serde::{Deserialize, Serialize};
-use serde_bencode::de;
-use serde_bencode::ser;
 use sha1::{Digest, Sha1};
 use std::fmt::Display;
 use std::fs::File;
@@ -71,7 +69,7 @@ pub fn parse_torrent_file<P: AsRef<Path>>(path: P) -> Result<Torrent, anyhow::Er
     let mut file = File::open(path)?;
     let mut buf = Vec::new();
     file.read_to_end(&mut buf)?;
-    let torrent: Torrent = de::from_bytes(&buf)?;
+    let torrent: Torrent = serde_bencode::de::from_bytes(&buf)?;
     Ok(torrent)
 }
 
@@ -82,7 +80,7 @@ pub fn calculate_info_hash(info_dict: &Info) -> Result<String, anyhow::Error> {
 
 /// Calculate info hash as raw bytes string
 pub fn calculate_info_hash_bytes(info_dict: &Info) -> Result<Vec<u8>, anyhow::Error> {
-    let bencoded_info_dict = ser::to_bytes(info_dict)?;
+    let bencoded_info_dict = serde_bencode::ser::to_bytes(info_dict)?;
     let mut hasher = Sha1::new();
     hasher.update(&bencoded_info_dict);
     Ok(hasher.finalize().to_vec())
@@ -121,7 +119,11 @@ impl Display for Torrent {
             self.info.file_tree,
             calculate_info_hash(&self.info).unwrap(),
             self.info.piece_length,
-            get_pieces_hashes(&self.info).unwrap().join("\n")
-        )
+            get_pieces_hashes(&self.info).unwrap().join("\n"),
+        )?;
+        if let Some(comment) = &self.comment {
+            write!(f, "Comment {}\n", comment)?;
+        }
+        Ok(())
     }
 }

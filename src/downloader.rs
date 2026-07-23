@@ -21,28 +21,32 @@ impl Downloader {
     }
 
     pub async fn download(&mut self) {
-        let init_discovery = self.discoverer.discover().await.unwrap();
-        self.peers = init_discovery.peers;
-
-        let mut interval = time::interval(Duration::from_secs(init_discovery.interval as u64));
+        let mut interval = time::interval(Duration::from_secs(1));
 
         loop {
             tokio::select! {
                 _ = interval.tick() => {
-                    let discovery = self.discoverer.discover().await.unwrap();
+                    let discovery = self.discoverer.discover(&self.torrent).await.unwrap();
                     self.peers = discovery.peers;
                     println!("Peers updated: {} peers", self.peers.len());
+
+                    self.peers.iter().for_each(|p| println!("{:?}", p));
+
+                    interval = time::interval(Duration::from_secs(discovery.interval as u64));
                 }
                 else => break,
             }
 
             if !self.peers.is_empty() {
-                let peer = self.peers.first().unwrap();
+                let peer: &mut Peer = self.peers.first_mut().unwrap();
                 println!("Downloading from: {}", peer.sock_ip);
                 let total_pieces = self.torrent.info.pieces.len() / 20;
 
                 for pieces_index in 0..total_pieces {
-                    let piece = peer.get_piece(&self.torrent.info, pieces_index).unwrap();
+                    let piece = peer
+                        .get_piece(&self.torrent.info, pieces_index)
+                        .await
+                        .unwrap();
                     self.file_buffer.extend(piece);
                 }
 

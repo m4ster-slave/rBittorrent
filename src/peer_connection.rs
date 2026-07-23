@@ -1,14 +1,19 @@
+use anyhow::{anyhow, Ok};
+use sha1::{Digest, Sha1};
 use std::{
-    io::{self, Read, Write},
-    net::{SocketAddrV4, TcpStream},
+    net::SocketAddrV4,
+    sync::Arc,
     thread::{self},
     time::Duration,
 };
-
-use anyhow::anyhow;
-use sha1::{Digest, Sha1};
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::TcpStream,
+    sync::Mutex,
+};
 
 use crate::parser::{calculate_info_hash_bytes, FileTree, Info};
+
 /// Peer connections are symmetrical. Messages sent in both directions look the same, and data can
 /// flow in either direction.
 ///
@@ -28,6 +33,7 @@ pub struct Peer {
     /// Vector of booleans that are either set to true: meaning a piece is available or false:
     /// meaning a piece is not available
     pub available: Vec<bool>,
+    pub conn: Option<Arc<Mutex<TcpStream>>>,
 }
 
 // length: u8,
@@ -52,11 +58,11 @@ struct PeerMessage {
     payload: Vec<u8>,
 }
 
-fn download_piece(
+async fn download_piece(
     stream: &mut TcpStream,
     piece_index: u32,
     piece_length: usize,
-) -> io::Result<Vec<u8>> {
+) -> Result<Vec<u8>, anyhow::Error> {
     let block_size = 16 * 1024;
     let mut piece_buffer = vec![0u8; piece_length];
 
@@ -78,7 +84,7 @@ fn download_piece(
         let mut full_request = Vec::new();
         full_request.extend_from_slice(&(request.len() as u32).to_be_bytes());
         full_request.extend_from_slice(&request);
-        stream.write_all(&full_request)?;
+        stream.write_all(&full_request).await?;
     }
 
     let mut received_bytes = 0;
@@ -86,7 +92,7 @@ fn download_piece(
 
     while received_bytes < piece_length {
         // read length prefix
-        stream.read_exact(&mut u32_buf).unwrap();
+        stream.read_exact(&mut u32_buf).await?;
         let msg_len = u32::from_be_bytes(u32_buf);
 
         if msg_len == 0 {
@@ -95,7 +101,7 @@ fn download_piece(
         }
 
         let mut msg_buf = vec![0u8; msg_len as usize];
-        stream.read_exact(&mut msg_buf).unwrap();
+        stream.read_exact(&mut msg_buf).await?;
 
         let msg_id = msg_buf[0];
         let payload = &msg_buf[1..];
@@ -132,18 +138,22 @@ fn download_piece(
 }
 
 impl Peer {
-    pub fn get_piece(&self, info_dict: &Info, index: usize) -> Result<Vec<u8>, anyhow::Error> {
+    pub async fn perform_handshake(&mut self, info_dict: &Info) -> Result<(), anyhow::Error> {
         // all messages follow <length prefix: 4 bytes><message ID: 1 byte><optional payload>
 
         // Step 1
         // perform handshake
         let infohash = calculate_info_hash_bytes(info_dict)?;
         let handshake = generate_handshake(&infohash);
-        let mut stream = TcpStream::connect(self.sock_ip)?;
-        stream.write_all(&handshake)?;
+        self.conn = Some(Arc::new(Mutex::new(
+            TcpStream::connect(self.sock_ip).await?,
+        )));
+        let conn = self.conn.as_ref().unwrap();
+        let mut stream = conn.lock().await;
+        stream.write_all(&handshake).await?;
 
         let mut buf = vec![0u8; 68];
-        stream.read_exact(&mut buf)?;
+        stream.read_exact(&mut buf).await?;
 
         if buf[0] != 19 || &buf[1..20] != b"BitTorrent protocol" {
             return Err(anyhow!(
@@ -167,37 +177,61 @@ impl Peer {
         // etc. Spare bits at the end are set to zero.
         // read in length first
         let mut len_buf = [0u8; 4];
-        stream.read_exact(&mut len_buf)?;
+        stream.read_exact(&mut len_buf).await?;
         let msg_len = u32::from_be_bytes(len_buf);
 
         let mut msg_buf = vec![0u8; msg_len as usize];
-        stream.read_exact(&mut msg_buf)?;
+        stream.read_exact(&mut msg_buf).await?;
 
-        let message_id = msg_buf[0];
+        let _message_id = msg_buf[0];
         let bitfield = msg_buf[1..].to_vec();
+        println!("Bits: ");
+        for byte in &bitfield {
+            for i in (0..8).rev() {
+                let bit = (byte >> i) & 1;
+                print!("{bit}, ");
+                if bit == 1 {
+                    self.available.push(true);
+                } else {
+                    self.available.push(false);
+                }
+            }
+        }
 
-        // Step 3
+        Ok(())
+    }
+
+    pub async fn get_piece(
+        &mut self,
+        info_dict: &Info,
+        index: usize,
+    ) -> Result<Vec<u8>, anyhow::Error> {
+        let conn = self.conn.as_ref().unwrap();
+        let mut stream = conn.lock().await;
+
+        let mut len_buf = [0u8; 4];
+        // Step 1
         // send interested packaged
         let mut msg_buf = Vec::new();
         // length prefix: 1
         msg_buf.extend_from_slice(&(1u32.to_be_bytes()));
         msg_buf.push(2);
-        stream.write_all(&msg_buf)?;
+        stream.write_all(&msg_buf).await?;
 
-        // Step 4
+        // Step 2
         // wait for unchoke message
         let mut msg_buf: Vec<u8> = vec![0];
         while msg_buf[0] != 1 {
-            stream.read_exact(&mut len_buf)?;
+            stream.read_exact(&mut len_buf).await?;
             msg_buf = vec![0u8; u32::from_be_bytes(len_buf) as usize];
-            stream.read_exact(&mut msg_buf)?;
+            stream.read_exact(&mut msg_buf).await?;
             println!("waiting for unchoke message, got: {}", msg_buf[0]);
             // sleep 100ms to not overload the network
             thread::sleep(Duration::new(0, 100_000));
         }
         println!("Got unchoke message");
 
-        // Step 5 & 6
+        // Step 3 & 4
         // send request messages and wait for piece messages putting all together
 
         // calculate correct piece size
@@ -216,7 +250,7 @@ impl Peer {
         };
 
         println!("Downloading piece with length {}", piece_length);
-        let piece = download_piece(&mut stream, index as u32, piece_length)?;
+        let piece = download_piece(&mut stream, index as u32, piece_length).await?;
 
         // compare hash of piece with the hash in the info dict
         let mut hasher = Sha1::new();
