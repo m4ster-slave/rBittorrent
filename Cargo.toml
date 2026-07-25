@@ -4,13 +4,13 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-anyhow = "1.0.98"
+anyhow = "1.0.104"
 hex = "0.4.3"
-reqwest = {version = "0.12.20"}
-serde = {version = "1.0.219", features = ["derive"]}
+reqwest = {version = "0.12.28"}
+serde = {version = "1.0.229", features = ["derive"]}
 serde_bencode = "0.2.4"
 serde_bytes = "0.11"
-sha1 = "0.10.6"
+sha1 = "0.10.7"
 # TODO: check which features we acc need
-tokio = {version = "1.45.1", features = ["full"]}
-url = "2.5.4"
+tokio = {version = "1.53.1", features = ["full"]}
+url = "2.5.8"
