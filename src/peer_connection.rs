@@ -34,6 +34,9 @@ pub struct Peer {
     /// meaning a piece is not available
     pub available: Vec<bool>,
     pub conn: Option<Arc<Mutex<TcpStream>>>,
+    /// per the spec, unchoke is a state, not a per-request event, sooooo that means if i keep
+    /// waiting for new unchoke events i can wait untile the heat death of the universe
+    pub peer_choking: bool,
 }
 
 // length: u8,
@@ -63,15 +66,15 @@ async fn download_piece(
     piece_index: u32,
     piece_length: usize,
 ) -> Result<Vec<u8>, anyhow::Error> {
-    let block_size = 16 * 1024;
+    const BLOCK_SIZE: usize = 16 * 1024;
     let mut piece_buffer = vec![0u8; piece_length];
 
     // send requests
-    for offset in (0..piece_length).step_by(block_size) {
-        let block_len = if offset + block_size > piece_length {
+    for offset in (0..piece_length).step_by(BLOCK_SIZE) {
+        let block_len = if offset + BLOCK_SIZE > piece_length {
             piece_length - offset
         } else {
-            block_size
+            BLOCK_SIZE
         };
 
         let mut request = Vec::with_capacity(13);
@@ -124,12 +127,12 @@ async fn download_piece(
             }
             0 => {
                 // skip choke
-                thread::sleep(Duration::new(0, 100_000)); // wait 100ms
+                tokio::time::sleep(Duration::new(0, 100_000)).await; // wait 100ms
             }
             _ => {
                 // TODO handle other types
                 // skip for now
-                thread::sleep(Duration::new(0, 100_000));
+                tokio::time::sleep(Duration::new(0, 100_000)).await;
             }
         }
     }
@@ -210,30 +213,51 @@ impl Peer {
         let mut stream = conn.lock().await;
 
         let mut len_buf = [0u8; 4];
-        // Step 1
-        // send interested packaged
-        let mut msg_buf = Vec::new();
-        // length prefix: 1
-        msg_buf.extend_from_slice(&(1u32.to_be_bytes()));
-        msg_buf.push(2);
-        stream.write_all(&msg_buf).await?;
 
-        // Step 2
-        // wait for unchoke message
-        let mut msg_buf: Vec<u8> = vec![0];
-        while msg_buf[0] != 1 {
-            stream.read_exact(&mut len_buf).await?;
-            msg_buf = vec![0u8; u32::from_be_bytes(len_buf) as usize];
-            stream.read_exact(&mut msg_buf).await?;
-            println!("waiting for unchoke message, got: {}", msg_buf[0]);
-            // sleep 100ms to not overload the network
-            thread::sleep(Duration::new(0, 100_000));
+        if self.peer_choking {
+            // Step 1: send interested
+            let mut msg_buf = Vec::new();
+            msg_buf.extend_from_slice(&(1u32.to_be_bytes()));
+            msg_buf.push(2);
+            stream.write_all(&msg_buf).await?;
+
+            // Step 2: wait for unchoke
+            loop {
+                stream.read_exact(&mut len_buf).await?;
+                let msg_len = u32::from_be_bytes(len_buf);
+
+                if msg_len == 0 {
+                    println!("Received keep-alive while waiting for unchoke");
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    continue;
+                }
+
+                let mut msg_buf = vec![0u8; msg_len as usize];
+                stream.read_exact(&mut msg_buf).await?;
+                let msg_id = msg_buf[0];
+
+                match msg_id {
+                    1 => {
+                        self.peer_choking = false;
+                        break;
+                    }
+                    0 => {
+                        self.peer_choking = true; // stays choked
+                    }
+                    _ => {
+                        // have, bitfield, etc. — ignore for now but don't misinterpret them
+                    }
+                }
+
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            println!("Got unchoke message");
+        } else {
+            println!("Already unchoked, skipping interested/unchoke handshake");
         }
-        println!("Got unchoke message");
 
         // Step 3 & 4
         // send request messages and wait for piece messages putting all together
-
         // calculate correct piece size
         let total_pieces = info_dict.pieces.len() / 20;
         let total_length = match &info_dict.file_tree {
@@ -251,11 +275,13 @@ impl Peer {
 
         println!("Downloading piece with length {}", piece_length);
         let piece = download_piece(&mut stream, index as u32, piece_length).await?;
+        println!("Piece succesfully downloaded");
 
         // compare hash of piece with the hash in the info dict
         let mut hasher = Sha1::new();
         hasher.update(&piece);
         if hasher.finalize().to_vec() == info_dict.pieces[index * 20..index * 20 + 20] {
+            println!("Piece hash matches the hash in the file");
             Ok(piece)
         } else {
             Err(anyhow!(

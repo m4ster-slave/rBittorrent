@@ -43,10 +43,14 @@ impl Downloader {
                 let total_pieces = self.torrent.info.pieces.len() / 20;
 
                 for pieces_index in 0..total_pieces {
+                    println!("Getting piece {pieces_index}/{total_pieces}");
                     let piece = peer
                         .get_piece(&self.torrent.info, pieces_index)
                         .await
-                        .unwrap();
+                        .unwrap_or_else(|e| {
+                            println!("Error getting piece from peer {}", e);
+                            panic!()
+                        });
                     self.file_buffer.extend(piece);
                 }
 

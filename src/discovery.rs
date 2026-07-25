@@ -96,6 +96,7 @@ impl PeerDiscoverer {
                 sock_ip,
                 available: Vec::new(),
                 conn: None,
+                peer_choking: true,
             });
         }
 
