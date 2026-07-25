@@ -1,11 +1,6 @@
 use anyhow::{anyhow, Ok};
 use sha1::{Digest, Sha1};
-use std::{
-    net::SocketAddrV4,
-    sync::Arc,
-    thread::{self},
-    time::Duration,
-};
+use std::{net::SocketAddrV4, sync::Arc, time::Duration};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,

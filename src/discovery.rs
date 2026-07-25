@@ -1,13 +1,11 @@
-use serde::Deserialize;
 use serde_bencode::de;
-use std::net::{Ipv4Addr, SocketAddrV4};
 
-use crate::parser::{calculate_urlencoded_info_hash, Torrent};
-use crate::peer_connection::Peer;
+use crate::parser::{calculate_urlencoded_info_hash, AnnounceUrl, Torrent};
+use crate::tracker_response::TrackerResponse;
 
 #[derive(Clone)]
 pub struct PeerDiscoverer {
-    announce_url: String,
+    announce_url: AnnounceUrl,
     infohash: String,
     peer_id: Vec<u8>,
     port: u16,
@@ -15,25 +13,6 @@ pub struct PeerDiscoverer {
     pub downloaded: usize,
     pub left: usize,
     compact: usize,
-}
-
-#[derive(Debug, Deserialize)]
-struct PeerResponseSer {
-    interval: usize,
-    #[serde(rename(deserialize = "min interval"))]
-    min_interval: Option<usize>,
-    #[serde(with = "serde_bytes")]
-    peers: Vec<u8>, // TODO parse this immediatly i just cant figure out how rn
-}
-
-#[derive(Debug)]
-pub struct PeerResponse {
-    /// The number of seconds the downloader should wait between regular rerequests
-    pub interval: usize,
-    pub _min_interval: Option<usize>,
-    /// list of dictionaries corresponding to peers, each of which contains the keys peer id, ip,
-    /// and port, which map to the peer's self-selected ID, IP address or dns name as a string, and
-    pub peers: Vec<Peer>,
 }
 
 impl PeerDiscoverer {
@@ -49,8 +28,32 @@ impl PeerDiscoverer {
         let len = peer_id_bytes.len().min(20);
         padded_peer_id[..len].copy_from_slice(&peer_id_bytes[..len]);
 
+        let mut announce_url = torrent.announce.clone();
+        if !matches!(torrent.announce, AnnounceUrl::Http(_) | AnnounceUrl::Udp(_)) {
+            let list = torrent.announce_list.ok_or_else(|| {
+                println!("No announce list and the standard announce url is not udp/http");
+                panic!();
+            });
+
+            // 2. Flatten Vec<Vec<AnnounceUrl>> into an iterator of &AnnounceUrl
+            //    and find the first variant matching Http or Udp
+            announce_url = list
+                .iter()
+                // this is the ugliest code that has ever been written in the history of mankind and
+                // i apoligize in advance for anyone who ever has to lay their eyes on this
+                .flatten()
+                .flatten()
+                .find(|url| matches!(url, AnnounceUrl::Http(_) | AnnounceUrl::Udp(_)))
+                .ok_or_else(|| {
+                    println!("No HTTP or UDP announce URL found in the list");
+                    todo!("Any url type but HTTP or UDP hasnt been implemented yet")
+                })
+                .unwrap()
+                .clone();
+        }
+
         Self {
-            announce_url: torrent.announce,
+            announce_url,
             infohash: calculate_urlencoded_info_hash(&torrent.info).unwrap(),
             peer_id: padded_peer_id.to_vec(),
             port,
@@ -67,47 +70,34 @@ impl PeerDiscoverer {
     }
 
     /// function to disvoer your peers, after a new peer is discovered we get its handshake
-    pub async fn discover(&mut self, torrent: &Torrent) -> Result<PeerResponse, anyhow::Error> {
-        let url = format!(
-            "{}/?info_hash={}&peer_id={}&port={}&uploaded={}&downloaded={}&left={}&compact={}",
-            self.announce_url,
-            self.infohash,
-            String::from_utf8_lossy(&self.peer_id),
-            self.port,
-            self.uploaded,
-            self.downloaded,
-            self.left,
-            self.compact
-        );
-        let resp = reqwest::get(url).await?;
-        let body = resp.bytes().await?;
+    pub async fn discover(&mut self, torrent: &Torrent) -> Result<TrackerResponse, anyhow::Error> {
+        let mut response: TrackerResponse = match &self.announce_url {
+            AnnounceUrl::Http(announce_url) => {
+                let url = format!(
+                    "{}/?info_hash={}&peer_id={}&port={}&uploaded={}&downloaded={}&left={}&compact={}",
+                    announce_url,
+                    self.infohash,
+                    String::from_utf8_lossy(&self.peer_id),
+                    self.port,
+                    self.uploaded,
+                    self.downloaded,
+                    self.left,
+                    self.compact
+                );
+                let resp = reqwest::get(url).await?;
+                let body = resp.bytes().await?;
 
-        let peer_response_ser: PeerResponseSer = de::from_bytes(&body)?;
+                de::from_bytes(&body)?
+            }
+            _ => {
+                todo!()
+            }
+        };
 
-        let mut peers: Vec<Peer> = Vec::new();
-        for peer in peer_response_ser.peers.chunks(6) {
-            let p1 = peer[4] as u16;
-            let p2 = peer[5] as u16;
-            let port = (p1 << 8) | p2;
-            let ip = Ipv4Addr::new(peer[0], peer[1], peer[2], peer[3]);
-            let sock_ip = SocketAddrV4::new(ip, port);
-
-            peers.push(Peer {
-                sock_ip,
-                available: Vec::new(),
-                conn: None,
-                peer_choking: true,
-            });
-        }
-
-        for peer in peers.iter_mut() {
+        for peer in response.peers.iter_mut() {
             peer.perform_handshake(&torrent.info).await?;
         }
 
-        Ok(PeerResponse {
-            interval: peer_response_ser.interval,
-            _min_interval: peer_response_ser.min_interval,
-            peers,
-        })
+        Ok(response)
     }
 }

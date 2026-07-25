@@ -26,7 +26,11 @@ impl Downloader {
         loop {
             tokio::select! {
                 _ = interval.tick() => {
-                    let discovery = self.discoverer.discover(&self.torrent).await.unwrap();
+                    let discovery = self.discoverer.discover(&self.torrent).await.unwrap_or_else(|e| {
+                        println!("Discovery service threw an error: {}", e);
+                        panic!()
+                    });
+
                     self.peers = discovery.peers;
                     println!("Peers updated: {} peers", self.peers.len());
 
