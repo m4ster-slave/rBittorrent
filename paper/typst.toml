@@ -1,0 +1,9 @@
+[package]
+name = "bittorrent-performance-paper"
+version = "0.1.0"
+entrypoint = "main.typ"
+authors = ["Lukiana Weger <mail@weger.dev>"]
+license = "MIT"
+description = "Evaluation of Piece and Peer Selection Algorithms in BitTorrent"
+categories = ["paper", "utility"]
+compiler = "0.14.0" 
