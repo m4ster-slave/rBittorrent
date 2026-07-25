@@ -14,6 +14,7 @@ u can read the paper and writing notes here
 ## Learning Material
 
 - https://www.bittorrent.org/beps/bep_0052.html
+- https://libtorrent.org/udp_tracker_protocol.html#actions
 - https://app.codecrafters.io/courses/bittorrent/stages/ow9
 - https://www.youtube.com/watch?v=jf_ddGnum_4&t=2062s
 - https://bittorrent.org/bittorrentecon.pdf

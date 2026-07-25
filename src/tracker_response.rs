@@ -8,7 +8,7 @@ use crate::peer_connection::Peer;
 #[derive(Debug)]
 pub struct TrackerResponse {
     /// The number of seconds the downloader should wait between regular rerequests
-    pub interval: usize,
+    pub interval: i32,
 
     /// list of dictionaries corresponding to peers, each of which contains the keys peer id, ip,
     /// and port, which map to the peer's self-selected ID, IP address or dns name as a string, and
@@ -88,7 +88,7 @@ impl<'de> Deserialize<'de> for TrackerResponse {
                             // Deserialize raw bytes directly from bencode binary string
                             let peer_bytes: serde_bytes::ByteBuf = map.next_value()?;
 
-                            if peer_bytes.len().is_multiple_of(6) {
+                            if !peer_bytes.len().is_multiple_of(6) {
                                 return Err(de::Error::custom(
                                     "peers byte string length must be a multiple of 6",
                                 ));

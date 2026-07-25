@@ -5,7 +5,6 @@ use std::fmt::Display;
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
-use url::form_urlencoded;
 
 #[derive(Debug, Clone, Deserialize)]
 /// Metainfo files (also known as .torrent files)
@@ -157,19 +156,11 @@ pub fn calculate_info_hash(info_dict: &Info) -> Result<String, anyhow::Error> {
 }
 
 /// Calculate info hash as raw bytes string
-pub fn calculate_info_hash_bytes(info_dict: &Info) -> Result<Vec<u8>, anyhow::Error> {
+pub fn calculate_info_hash_bytes(info_dict: &Info) -> Result<[u8; 20], anyhow::Error> {
     let bencoded_info_dict = serde_bencode::ser::to_bytes(info_dict)?;
     let mut hasher = Sha1::new();
     hasher.update(&bencoded_info_dict);
-    Ok(hasher.finalize().to_vec())
-}
-
-// Calculate url encoded info hash
-pub fn calculate_urlencoded_info_hash(info_dict: &Info) -> Result<String, anyhow::Error> {
-    let hashed_bytes = calculate_info_hash_bytes(info_dict)?;
-    let url_encoded_infohash = form_urlencoded::byte_serialize(&hashed_bytes).collect::<String>();
-
-    Ok(url_encoded_infohash)
+    Ok(hasher.finalize().into())
 }
 
 /// Get the hash of each piece in the metainfo file

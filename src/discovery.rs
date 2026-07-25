@@ -1,12 +1,20 @@
-use serde_bencode::de;
+use std::net::SocketAddr;
 
-use crate::parser::{calculate_urlencoded_info_hash, AnnounceUrl, Torrent};
+use serde_bencode::de;
+use tokio::net::UdpSocket;
+use url::form_urlencoded;
+
+use crate::parser::{calculate_info_hash_bytes, AnnounceUrl, Torrent};
+use crate::peer_connection::Peer;
 use crate::tracker_response::TrackerResponse;
+use crate::udp_tracker::{
+    Action, AnnounceRequest, AnnounceResponse, ConnectRequest, ConnectResponse, TrackerError,
+};
 
 #[derive(Clone)]
 pub struct PeerDiscoverer {
     announce_url: AnnounceUrl,
-    infohash: String,
+    infohash: [u8; 20],
     peer_id: Vec<u8>,
     port: u16,
     uploaded: usize,
@@ -54,7 +62,7 @@ impl PeerDiscoverer {
 
         Self {
             announce_url,
-            infohash: calculate_urlencoded_info_hash(&torrent.info).unwrap(),
+            infohash: calculate_info_hash_bytes(&torrent.info).unwrap(),
             peer_id: padded_peer_id.to_vec(),
             port,
             uploaded: 0,
@@ -74,20 +82,124 @@ impl PeerDiscoverer {
         let mut response: TrackerResponse = match &self.announce_url {
             AnnounceUrl::Http(announce_url) => {
                 let url = format!(
-                    "{}/?info_hash={}&peer_id={}&port={}&uploaded={}&downloaded={}&left={}&compact={}",
-                    announce_url,
-                    self.infohash,
-                    String::from_utf8_lossy(&self.peer_id),
-                    self.port,
-                    self.uploaded,
-                    self.downloaded,
-                    self.left,
-                    self.compact
-                );
+                                    "{}/?info_hash={}&peer_id={}&port={}&uploaded={}&downloaded={}&left={}&compact={}",
+                                    announce_url,
+                                    form_urlencoded::byte_serialize(&self.infohash).collect::<String>(),
+                                    String::from_utf8_lossy(&self.peer_id),
+                                    self.port,
+                                    self.uploaded,
+                                    self.downloaded,
+                                    self.left,
+                                    self.compact
+                                );
                 let resp = reqwest::get(url).await?;
                 let body = resp.bytes().await?;
 
                 de::from_bytes(&body)?
+            }
+
+            AnnounceUrl::Udp(announce_url) => {
+                let parsed_url = url::Url::parse(announce_url)?;
+                let host = parsed_url.host_str().ok_or_else(|| {
+                    anyhow::anyhow!("UDP announce URL has no host: {}", announce_url)
+                })?;
+                let port = parsed_url.port().ok_or_else(|| {
+                    anyhow::anyhow!("UDP announce URL has no port: {}", announce_url)
+                })?;
+
+                // host may be a domain name, so this needs an actual DNS lookup rather than
+                // a naive SocketAddr::parse on the raw string
+                let remote_addr: SocketAddr =
+                    tokio::net::lookup_host((host, port))
+                        .await?
+                        .next()
+                        .ok_or_else(|| anyhow::anyhow!("Could not resolve host: {}", host))?;
+
+                let local_addr: SocketAddr = if remote_addr.is_ipv4() {
+                    "0.0.0.0:0"
+                } else {
+                    unimplemented!();
+                }
+                .parse()?;
+
+                let socket = UdpSocket::bind(local_addr).await?;
+                socket.connect(&remote_addr).await?;
+
+                // 1. Send Connect Request
+                let my_transaction_id = rand::random::<i32>();
+                let connect_request = ConnectRequest::new(my_transaction_id);
+                socket.send(&connect_request.serialize()).await?;
+
+                // 2. Receive Connect Response
+                let mut data = vec![0u8; 2048]; // 2KB buffer is plenty
+                let len = socket.recv(&mut data).await?;
+                let response_bytes = &data[..len];
+
+                // Check for tracker errors on connect
+                if len >= 4 {
+                    let action_id = i32::from_be_bytes(response_bytes[0..4].try_into()?);
+                    if action_id == Action::Error as i32 {
+                        let err = TrackerError::parse(response_bytes)?;
+                        anyhow::bail!("Tracker returned error on connect: {}", err.error_string);
+                    }
+                }
+
+                // Parse standard connect response
+                let connect_response = ConnectResponse::parse(response_bytes)?;
+                println!(
+                    "Successfully connected! Connection ID: {}",
+                    connect_response.connection_id
+                );
+
+                // 3. Send Announce Request
+                let announce_transaction_id = rand::random::<i32>();
+
+                // info_hash_bytes.copy_from_slice(&raw_20_byte_hash_here);
+
+                let mut peer_id_bytes = [0u8; 20];
+                peer_id_bytes.copy_from_slice(&self.peer_id);
+
+                let announce_request = AnnounceRequest::new(
+                    connect_response.connection_id,
+                    announce_transaction_id,
+                    self.infohash,
+                    peer_id_bytes,
+                    self.downloaded as i64,
+                    self.left as i64,
+                    self.uploaded as i64,
+                    self.port,
+                );
+
+                socket.send(&announce_request.serialize()).await?;
+
+                // 4. Receive Announce Response
+                let len = socket.recv(&mut data).await?;
+                let announce_resp_bytes = &data[..len];
+
+                // Check for tracker errors on announce
+                if len >= 4 {
+                    let action_id = i32::from_be_bytes(announce_resp_bytes[0..4].try_into()?);
+                    if action_id == Action::Error as i32 {
+                        let err = TrackerError::parse(announce_resp_bytes)?;
+                        anyhow::bail!("Tracker returned error on announce: {}", err.error_string);
+                    }
+                }
+
+                let announce_response = AnnounceResponse::parse(announce_resp_bytes)?;
+
+                TrackerResponse {
+                    interval: announce_response.interval,
+                    peers: announce_response
+                        .peers
+                        .iter()
+                        .map(|p| Peer {
+                            sock_ip: p.clone(),
+                            available: Vec::new(),
+                            conn: None,
+                            peer_choking: true,
+                        })
+                        .collect(),
+                }
             }
             _ => {
                 todo!()

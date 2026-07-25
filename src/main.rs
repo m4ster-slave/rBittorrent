@@ -13,6 +13,7 @@ mod downloader;
 mod parser;
 mod peer_connection;
 mod tracker_response;
+mod udp_tracker;
 
 #[tokio::main]
 async fn main() {
