@@ -84,6 +84,10 @@ impl AnnounceUrl {
             Err(format!("unsupported URL scheme: {s}"))
         }
     }
+
+    pub fn is_supported(&self) -> bool {
+        matches!(self, AnnounceUrl::Http(_) | AnnounceUrl::Udp(_))
+    }
 }
 
 pub fn deserialize_announce_url<'de, D>(deserializer: D) -> Result<AnnounceUrl, D::Error>
