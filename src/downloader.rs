@@ -34,7 +34,7 @@ impl Downloader {
                     self.peers = discovery.peers;
                     println!("Peers updated: {} peers", self.peers.len());
 
-                    self.peers.iter().for_each(|p| println!("{:?}", p));
+                    self.peers.iter().for_each(|p| println!("{}", p));
 
                     interval = time::interval(Duration::from_secs(discovery.interval as u64));
                 }

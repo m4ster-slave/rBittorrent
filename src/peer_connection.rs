@@ -1,6 +1,7 @@
-use anyhow::{anyhow, Ok};
+use anyhow::anyhow;
+use bytes::BufMut;
 use sha1::{Digest, Sha1};
-use std::{net::SocketAddrV4, sync::Arc, time::Duration};
+use std::{fmt::Display, net::SocketAddrV4, sync::Arc, time::Duration};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
@@ -34,26 +35,57 @@ pub struct Peer {
     pub peer_choking: bool,
 }
 
+impl Display for Peer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} | choking: {} | availability: ({}/{})",
+            self.sock_ip,
+            self.peer_choking,
+            // this is a bad implementation of counting "how many pieces" a client has since the
+            // bitfield is always divisible by 8 but ehhh idrc
+            self.available.iter().filter(|a| **a).count(),
+            self.available.len()
+        )
+    }
+}
+
 // length: u8,
 // protocol_string: [char; 19],
 // zero_bytes: [u8; 8],
 // infohash: [u8; 20],
 // peer_id: [u8; 20],
 // TODO: Make this a struct and read the direct memory into a buffer
-fn generate_handshake(infohash: &[u8]) -> Vec<u8> {
-    let mut handshake: Vec<u8> = Vec::new();
-    handshake.push(19);
-    handshake.extend_from_slice("BitTorrent protocol".as_bytes());
-    handshake.extend_from_slice(&[0u8; 8]);
-    handshake.extend_from_slice(&infohash[0..20]);
-    handshake.extend_from_slice("00112233445566778899".as_bytes());
-    handshake
+struct Handshake {
+    length: u8,
+    protocol_string: [u8; 19],
+    zero_bytes: [u8; 8],
+    infohash: [u8; 20],
+    peer_id: [u8; 20],
 }
 
-struct PeerMessage {
-    length: u64,
-    message_id: u8,
-    payload: Vec<u8>,
+impl Handshake {
+    fn new(infohash: &[u8; 20]) -> Self {
+        Self {
+            length: 19,
+            protocol_string: *b"BitTorrent protocol",
+            zero_bytes: [0u8; 8],
+            infohash: *infohash,
+            // TOOD peer id generation
+            peer_id: *b"00112233445566778899",
+        }
+    }
+
+    fn serialize(&self) -> Vec<u8> {
+        let mut buf = Vec::with_capacity(self.length as usize);
+        buf.put_u8(self.length);
+        buf.put_slice(&self.protocol_string);
+        buf.put_slice(&self.zero_bytes);
+        buf.put_slice(&self.infohash);
+        buf.put_slice(&self.peer_id);
+
+        buf
+    }
 }
 
 async fn download_piece(
@@ -137,21 +169,32 @@ async fn download_piece(
 
 impl Peer {
     pub async fn perform_handshake(&mut self, info_dict: &Info) -> Result<(), anyhow::Error> {
+        println!("performing handshake on peer {}", self.sock_ip);
         // all messages follow <length prefix: 4 bytes><message ID: 1 byte><optional payload>
 
         // Step 1
         // perform handshake
         let infohash = calculate_info_hash_bytes(info_dict)?;
-        let handshake = generate_handshake(&infohash);
+        let handshake = Handshake::new(&infohash);
         self.conn = Some(Arc::new(Mutex::new(
-            TcpStream::connect(self.sock_ip).await?,
+            match tokio::time::timeout(Duration::from_secs(5), TcpStream::connect(self.sock_ip))
+                .await
+            {
+                Ok(recv_result) => recv_result?, // socket.recv succeeded within 5 seconds
+                Err(_) => anyhow::bail!("Timed out waiting for connect response from peer"),
+            },
         )));
         let conn = self.conn.as_ref().unwrap();
         let mut stream = conn.lock().await;
-        stream.write_all(&handshake).await?;
+        stream.write_all(&handshake.serialize()).await?;
 
         let mut buf = vec![0u8; 68];
-        stream.read_exact(&mut buf).await?;
+        match tokio::time::timeout(Duration::from_secs(5), stream.read_exact(&mut buf)).await {
+            Ok(recv_result) => recv_result?, // socket.recv succeeded within 5 seconds
+            Err(_) => anyhow::bail!("Timed out waiting for connect response from peer"),
+        };
+
+        println!("we connected to peer");
 
         if buf[0] != 19 || &buf[1..20] != b"BitTorrent protocol" {
             return Err(anyhow!(
@@ -175,19 +218,25 @@ impl Peer {
         // etc. Spare bits at the end are set to zero.
         // read in length first
         let mut len_buf = [0u8; 4];
-        stream.read_exact(&mut len_buf).await?;
+        match tokio::time::timeout(Duration::from_secs(5), stream.read_exact(&mut len_buf)).await {
+            Ok(recv_result) => recv_result?, // socket.recv succeeded within 5 seconds
+            Err(_) => anyhow::bail!("Timed out waiting for length of the buffer from peer"),
+        };
         let msg_len = u32::from_be_bytes(len_buf);
 
+        println!("length of the buffer is = {msg_len}");
+
         let mut msg_buf = vec![0u8; msg_len as usize];
-        stream.read_exact(&mut msg_buf).await?;
+        match tokio::time::timeout(Duration::from_secs(5), stream.read_exact(&mut msg_buf)).await {
+            Ok(recv_result) => recv_result?, // socket.recv succeeded within 5 seconds
+            Err(_) => anyhow::bail!("Timed out waiting for bitfield from peer"),
+        };
 
         let _message_id = msg_buf[0];
         let bitfield = msg_buf[1..].to_vec();
-        println!("Bits: ");
         for byte in &bitfield {
             for i in (0..8).rev() {
                 let bit = (byte >> i) & 1;
-                print!("{bit}, ");
                 if bit == 1 {
                     self.available.push(true);
                 } else {
@@ -195,6 +244,8 @@ impl Peer {
                 }
             }
         }
+
+        println!("finished handshake on peer {}", self.sock_ip);
 
         Ok(())
     }

@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use serde_bencode::de;
 use tokio::net::UdpSocket;
+use tokio::task::JoinSet;
 use url::form_urlencoded;
 
 use crate::parser::{calculate_info_hash_bytes, AnnounceUrl, Torrent};
@@ -222,12 +223,27 @@ impl PeerDiscoverer {
                 Ok(mut response) => {
                     println!("Successfully received peers from tracker!");
 
-                    // perform handshakes on new peers
-                    for peer in response.peers.iter_mut() {
-                        if let Err(e) = peer.perform_handshake(&torrent.info).await {
+                    let info = std::sync::Arc::new(torrent.info.clone());
+                    let mut task_handle = JoinSet::new();
+
+                    for mut peer in response.peers.drain(..) {
+                        let info = info.clone();
+                        task_handle.spawn(async move {
+                            let result = peer.perform_handshake(&info).await;
+                            (peer, result)
+                        });
+                    }
+
+                    let mut peers = Vec::new();
+                    for (peer, result) in task_handle.join_all().await {
+                        if let Err(e) = &result {
                             eprintln!("Failed handshake with peer {:?}: {e}", peer.sock_ip);
+                        } else {
+                            // only keep peers where the handshake was successfull
+                            peers.push(peer);
                         }
                     }
+                    response.peers = peers;
 
                     return Ok(response);
                 }
