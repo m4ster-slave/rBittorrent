@@ -1,12 +1,12 @@
 //! # rBittorrent
 //! Simple implementation of the BitTorrent protocoll in rust with minimal dependencies
 
-use std::{fs::File, io::Write};
+use std::{fs::File, io::Write, path::PathBuf};
 
 use anyhow::Ok;
 use tokio::task::JoinSet;
 
-use crate::{discovery::PeerDiscoverer, downloader::Downloader};
+use crate::{discovery::PeerDiscoverer, downloader::Downloader, parser::FileTree};
 
 mod discovery;
 mod downloader;
@@ -44,11 +44,42 @@ async fn main() {
             println!("Downloading {}:\n{}", copy, torrent);
 
             let discoverer = PeerDiscoverer::new("rBittorrent", 6969, torrent.clone()).await;
-            let mut downloader = Downloader::new(&discoverer, torrent);
+            let mut downloader = Downloader::new(&discoverer, &torrent);
             downloader.download().await;
 
-            let mut out_file = File::create_new(file_name)?;
-            out_file.write_all(&downloader.file_buffer)?;
+            // writing file to disk
+            match &torrent.info.file_tree {
+                FileTree::SingleFile { .. } => {
+                    let mut out_file = File::create_new(file_name)?;
+                    out_file.write_all(&downloader.file_buffer)?;
+                }
+                FileTree::MultiFile { files } => {
+                    let base_dir = PathBuf::from(&file_name);
+                    std::fs::create_dir_all(&base_dir)?;
+
+                    let mut buffer_offset = 0;
+
+                    for file_info in files {
+                        let mut current_file_path = base_dir.clone();
+
+                        for path_segment in &file_info.path {
+                            current_file_path.push(path_segment);
+                        }
+
+                        if let Some(parent) = current_file_path.parent() {
+                            std::fs::create_dir_all(parent)?;
+                        }
+
+                        let mut out_file = File::create(&current_file_path)?;
+                        let file_data = &downloader.file_buffer
+                            [buffer_offset..buffer_offset + file_info.length];
+                        out_file.write_all(file_data)?;
+
+                        buffer_offset += file_info.length;
+                    }
+                }
+            }
+
             Ok(())
         });
     }

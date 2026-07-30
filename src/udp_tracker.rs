@@ -222,7 +222,7 @@ impl AnnounceResponse {
 
         // The rest of the payload consists of 6-byte peer chunks: 4 bytes IP + 2 bytes Port
         let remaining_bytes = src.remaining();
-        if remaining_bytes.is_multiple_of(6) {
+        if !remaining_bytes.is_multiple_of(6) {
             return Err(anyhow::anyhow!("Invalid payload size for peer list"));
         }
 

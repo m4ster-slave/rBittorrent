@@ -307,9 +307,10 @@ impl Peer {
         // calculate correct piece size
         let total_pieces = info_dict.pieces.len() / 20;
         let total_length = match &info_dict.file_tree {
-            FileTree::SingleFile { length } => length,
-            FileTree::MultiFile { .. } => {
-                unimplemented!()
+            FileTree::SingleFile { length } => *length,
+            FileTree::MultiFile { files } => {
+                // parse the file tree
+                files.iter().map(|f| f.length).sum()
             }
         };
 
