@@ -91,7 +91,7 @@ impl PeerDiscoverer {
     }
 
     pub async fn announce_udp(&self, announce_url: &str) -> Result<TrackerResponse, anyhow::Error> {
-        let parsed_url = url::Url::parse(&announce_url)?;
+        let parsed_url = url::Url::parse(announce_url)?;
         let host = parsed_url
             .host_str()
             .ok_or_else(|| anyhow::anyhow!("UDP announce URL has no host: {}", announce_url))?;
@@ -194,7 +194,7 @@ impl PeerDiscoverer {
                 .peers
                 .iter()
                 .map(|p| Peer {
-                    sock_ip: p.clone(),
+                    sock_ip: *p,
                     available: Vec::new(),
                     conn: None,
                     peer_choking: true,

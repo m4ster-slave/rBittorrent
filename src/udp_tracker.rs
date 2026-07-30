@@ -61,7 +61,7 @@ impl ConnectRequest {
 }
 
 /// 2. Tracker response
-/// Note the connection and transaction_id for later use
+///    Note the connection and transaction_id for later use
 ///
 /// ```
 ///Offset  Size            Name            Value
@@ -71,6 +71,7 @@ impl ConnectRequest {
 /// 16
 /// ```
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct ConnectResponse {
     action: Action,
     transaction_id: i32,
@@ -136,6 +137,7 @@ pub struct AnnounceRequest {
 }
 
 impl AnnounceRequest {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         connection_id: i64,
         transaction_id: i32,
@@ -193,6 +195,7 @@ impl AnnounceRequest {
 /// 20 + 6 * N
 /// ```
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct AnnounceResponse {
     action: Action,
     transaction_id: i32,
@@ -219,7 +222,7 @@ impl AnnounceResponse {
 
         // The rest of the payload consists of 6-byte peer chunks: 4 bytes IP + 2 bytes Port
         let remaining_bytes = src.remaining();
-        if remaining_bytes % 6 != 0 {
+        if remaining_bytes.is_multiple_of(6) {
             return Err(anyhow::anyhow!("Invalid payload size for peer list"));
         }
 
@@ -227,7 +230,7 @@ impl AnnounceResponse {
         while src.has_remaining() {
             let ip = Ipv4Addr::from(src.get_u32());
             let port = src.get_u16();
-            peers.push(SocketAddrV4::new(ip.into(), port));
+            peers.push(SocketAddrV4::new(ip, port));
         }
 
         Ok(Self {
@@ -242,6 +245,7 @@ impl AnnounceResponse {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct TrackerError {
     action: Action,
     transaction_id: i32,
