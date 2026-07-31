@@ -1,9 +1,9 @@
+use serde_bencode::de;
 use std::net::SocketAddr;
 use std::time::Duration;
-
-use serde_bencode::de;
 use tokio::net::UdpSocket;
 use tokio::task::JoinSet;
+use tracing::{error, info};
 use url::form_urlencoded;
 
 use crate::parser::{calculate_info_hash_bytes, AnnounceUrl, Torrent};
@@ -30,7 +30,7 @@ impl PeerDiscoverer {
         let mut peer_id_bytes = peer_id.as_bytes();
 
         if peer_id_bytes.len() > 20 {
-            eprintln!("Peer ID was too long, using default: 'defaultBittorrentclient'");
+            error!("Peer ID was too long, using default: 'defaultBittorrentclient'");
             peer_id_bytes = b"defaultBittorrentclient";
         }
 
@@ -48,7 +48,7 @@ impl PeerDiscoverer {
             .collect();
 
         if announce_urls.is_empty() {
-            println!("No HTTP or UDP announce URL found in the list");
+            info!("No HTTP or UDP announce URL found in the list");
             todo!("Any url type but HTTP or UDP hasnt been implemented yet");
         }
 
@@ -120,7 +120,7 @@ impl PeerDiscoverer {
         let my_transaction_id = rand::random::<i32>();
         let connect_request = ConnectRequest::new(my_transaction_id);
         socket.send(&connect_request.serialize()).await?;
-        println!("Sent Connect Request");
+        info!("Sent Connect Request");
 
         // 2. Receive Connect Response
         let mut data = vec![0u8; 2048]; // 2KB buffer is plenty
@@ -132,7 +132,7 @@ impl PeerDiscoverer {
 
         let response_bytes = &data[..len];
 
-        println!("Got Connect Response");
+        info!("Got Connect Response");
 
         // Check for tracker errors on connect
         if len >= 4 {
@@ -145,7 +145,7 @@ impl PeerDiscoverer {
 
         // Parse standard connect response
         let connect_response = ConnectResponse::parse(response_bytes)?;
-        println!(
+        info!(
             "Successfully connected! Connection ID: {}",
             connect_response.connection_id
         );
@@ -166,7 +166,7 @@ impl PeerDiscoverer {
         );
 
         socket.send(&announce_request.serialize()).await?;
-        println!("Sent Announce");
+        info!("Sent Announce");
 
         // 4. Receive Announce Response
         let len = match tokio::time::timeout(Duration::from_secs(5), socket.recv(&mut data)).await {
@@ -175,7 +175,7 @@ impl PeerDiscoverer {
         };
 
         let announce_resp_bytes = &data[..len];
-        println!("Got Announce");
+        info!("Got Announce");
 
         // Check for tracker errors on announce
         if len >= 4 {
@@ -208,20 +208,20 @@ impl PeerDiscoverer {
         let mut last_error = anyhow::anyhow!("No announce URLs available to contact");
 
         for announce_url in &self.announce_urls {
-            println!("Attempting tracker announce with: {announce_url:?}");
+            info!("Attempting tracker announce with: {announce_url:?}");
 
             let response_result: Result<TrackerResponse, anyhow::Error> = match announce_url {
                 AnnounceUrl::Http(url) => self.announce_http(url).await,
                 AnnounceUrl::Udp(url) => self.announce_udp(url).await,
                 _ => {
-                    eprintln!("Unsupported announce URL scheme, skipping...");
+                    error!("Unsupported announce URL scheme, skipping...");
                     continue;
                 }
             };
 
             match response_result {
                 Ok(mut response) => {
-                    println!("Successfully received peers from tracker!");
+                    info!("Successfully received peers from tracker!");
 
                     let info = std::sync::Arc::new(torrent.info.clone());
                     let mut task_handle = JoinSet::new();
@@ -237,7 +237,7 @@ impl PeerDiscoverer {
                     let mut peers = Vec::new();
                     for (peer, result) in task_handle.join_all().await {
                         if let Err(e) = &result {
-                            eprintln!("Failed handshake with peer {:?}: {e}", peer.sock_ip);
+                            error!("Failed handshake with peer {:?}: {e}", peer.sock_ip);
                         } else {
                             // only keep peers where the handshake was successfull
                             peers.push(peer);
@@ -248,7 +248,7 @@ impl PeerDiscoverer {
                     return Ok(response);
                 }
                 Err(err) => {
-                    eprintln!("Tracker announce failed for {announce_url:?}: {err}");
+                    error!("Tracker announce failed for {announce_url:?}: {err}");
                     last_error = err; // in case every tracker fails
                 }
             }

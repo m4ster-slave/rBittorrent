@@ -1,10 +1,11 @@
 //! # rBittorrent
 //! Simple implementation of the BitTorrent protocoll in rust with minimal dependencies
 
-use std::{fs::File, io::Write, path::PathBuf};
-
 use anyhow::Ok;
+use std::{fs::File, io::Write, path::PathBuf};
 use tokio::task::JoinSet;
+use tracing::{error, info, Level};
+use tracing_subscriber::FmtSubscriber;
 
 use crate::{discovery::PeerDiscoverer, downloader::Downloader, parser::FileTree};
 
@@ -17,10 +18,18 @@ mod udp_tracker;
 
 #[tokio::main]
 async fn main() {
+    let subscriber = FmtSubscriber::builder()
+        .with_max_level(Level::INFO)
+        .with_target(false) // Hides the module path to keep it clean, set to true if you want it
+        .with_thread_ids(true) // Helpful for debugging concurrent peer tasks
+        .finish();
+
+    tracing::subscriber::set_global_default(subscriber).expect("Setting default subscriber failed");
+
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 2 {
-        println!("Error: Specify at least one torrent file");
-        println!("Usage: {} /path/to/file.torrent", args[0]);
+        error!("Error: Specify at least one torrent file");
+        info!("Usage: {} /path/to/file.torrent", args[0]);
         return;
     }
 
@@ -36,12 +45,12 @@ async fn main() {
         let copy = file.clone();
         task_handle.spawn(async move {
             let torrent = parser::parse_torrent_file(copy.clone()).unwrap_or_else(|e| {
-                println!("Parser error: {e}");
+                error!("Parser error: {e}");
                 panic!()
             });
             let file_name = torrent.info.name.clone();
 
-            println!("Downloading {}:\n{}", copy, torrent);
+            info!("Downloading {}:\n{}", copy, torrent);
 
             let discoverer = PeerDiscoverer::new("rBittorrent", 6969, torrent.clone()).await;
             let mut downloader = Downloader::new(&discoverer, &torrent);
@@ -86,7 +95,7 @@ async fn main() {
 
     for res in task_handle.join_all().await {
         if let Err(e) = res {
-            eprintln!("Task panicked: {:?}", e);
+            error!("Task panicked: {:?}", e);
         }
     }
 }

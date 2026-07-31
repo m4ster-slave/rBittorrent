@@ -1,12 +1,12 @@
 use std::sync::Arc;
 use tokio::sync::Mutex;
-
-use crate::{discovery::PeerDiscoverer, parser::Torrent};
-
 use tokio::{
     task::JoinSet,
     time::{self, Duration},
 };
+use tracing::{error, info};
+
+use crate::{discovery::PeerDiscoverer, parser::Torrent};
 
 /// Responsible for downloading the file
 pub struct Downloader {
@@ -44,7 +44,7 @@ impl Downloader {
         let mut interval = time::interval(Duration::from_secs(1));
         let mut active_tasks = JoinSet::new();
 
-        println!(
+        info!(
             "Starting download of {} pieces ({} bytes total)",
             total_pieces, total_length
         );
@@ -53,7 +53,7 @@ impl Downloader {
             {
                 let queue = work_queue.lock().await;
                 if queue.is_empty() && active_tasks.is_empty() {
-                    println!("All pieces downloaded successfully!");
+                    info!("All pieces downloaded successfully!");
                     break;
                 }
             }
@@ -62,13 +62,13 @@ impl Downloader {
                 _ = interval.tick() => {
 
                     let discovery = self.discoverer.discover(&self.torrent).await.unwrap_or_else(|e| {
-                        println!("Discovery service threw an error: {}", e);
+                        info!("Discovery service threw an error: {}", e);
                         panic!()
                     });
 
-                    println!("Peers updated: {} peers", discovery.peers.len());
+                    info!("Peers updated: {} peers", discovery.peers.len());
 
-                    discovery.peers.iter().for_each(|p| println!("{}", p));
+                    discovery.peers.iter().for_each(|p| info!("{}", p));
 
                     interval = time::interval(Duration::from_secs(discovery.interval as u64));
 
@@ -100,10 +100,10 @@ impl Downloader {
                                         let end = (offset + piece_data.len()).min(buf.len());
                                         buf[offset..end].copy_from_slice(&piece_data[..end - offset]);
 
-                                        println!("Successfully downloaded piece {} from {}", piece_index, peer.sock_ip);
+                                        info!("Successfully downloaded piece {} from {}", piece_index, peer.sock_ip);
                                     }
                                     Err(e) => {
-                                        println!("Peer {} failed piece {}: {}", peer.sock_ip, piece_index, e);
+                                        error!("Peer {} failed piece {}: {}", peer.sock_ip, piece_index, e);
 
                                         // put the piece back in the queue so another peer can try it
                                         queue_clone.lock().await.push(piece_index);
@@ -119,7 +119,7 @@ impl Downloader {
                 // reap completed or failed peer tasks
                 Some(res) = active_tasks.join_next(), if !active_tasks.is_empty() => {
                     if let Err(e) = res {
-                        println!("A peer task panicked or failed: {:?}", e);
+                        error!("A peer task panicked or failed: {:?}", e);
                     }
                 }
             }

@@ -7,6 +7,7 @@ use tokio::{
     net::TcpStream,
     sync::Mutex,
 };
+use tracing::info;
 
 use crate::parser::{calculate_info_hash_bytes, FileTree, Info};
 
@@ -126,7 +127,7 @@ async fn download_piece(
         let msg_len = u32::from_be_bytes(u32_buf);
 
         if msg_len == 0 {
-            println!("Received keep-alive");
+            info!("Received keep-alive");
             continue;
         }
 
@@ -169,7 +170,7 @@ async fn download_piece(
 
 impl Peer {
     pub async fn perform_handshake(&mut self, info_dict: &Info) -> Result<(), anyhow::Error> {
-        println!("performing handshake on peer {}", self.sock_ip);
+        info!("performing handshake on peer {}", self.sock_ip);
         // all messages follow <length prefix: 4 bytes><message ID: 1 byte><optional payload>
 
         // Step 1
@@ -194,7 +195,7 @@ impl Peer {
             Err(_) => anyhow::bail!("Timed out waiting for connect response from peer"),
         };
 
-        println!("we connected to peer");
+        info!("we connected to peer");
 
         if buf[0] != 19 || &buf[1..20] != b"BitTorrent protocol" {
             return Err(anyhow!(
@@ -224,7 +225,7 @@ impl Peer {
         };
         let msg_len = u32::from_be_bytes(len_buf);
 
-        println!("length of the buffer is = {msg_len}");
+        info!("length of the buffer is = {msg_len}");
 
         let mut msg_buf = vec![0u8; msg_len as usize];
         match tokio::time::timeout(Duration::from_secs(5), stream.read_exact(&mut msg_buf)).await {
@@ -245,7 +246,7 @@ impl Peer {
             }
         }
 
-        println!("finished handshake on peer {}", self.sock_ip);
+        info!("finished handshake on peer {}", self.sock_ip);
 
         Ok(())
     }
@@ -273,7 +274,7 @@ impl Peer {
                 let msg_len = u32::from_be_bytes(len_buf);
 
                 if msg_len == 0 {
-                    println!("Received keep-alive while waiting for unchoke");
+                    info!("Received keep-alive while waiting for unchoke");
                     tokio::time::sleep(Duration::from_millis(100)).await;
                     continue;
                 }
@@ -297,9 +298,9 @@ impl Peer {
 
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
-            println!("Got unchoke message");
+            info!("Got unchoke message");
         } else {
-            println!("Already unchoked, skipping interested/unchoke handshake");
+            info!("Already unchoked, skipping interested/unchoke handshake");
         }
 
         // Step 3 & 4
@@ -320,15 +321,15 @@ impl Peer {
             info_dict.piece_length
         };
 
-        println!("Downloading piece with length {}", piece_length);
+        info!("Downloading piece with length {}", piece_length);
         let piece = download_piece(&mut stream, index as u32, piece_length).await?;
-        println!("Piece succesfully downloaded");
+        info!("Piece succesfully downloaded");
 
         // compare hash of piece with the hash in the info dict
         let mut hasher = Sha1::new();
         hasher.update(&piece);
         if hasher.finalize().to_vec() == info_dict.pieces[index * 20..index * 20 + 20] {
-            println!("Piece hash matches the hash in the file");
+            info!("Piece hash matches the hash in the file");
             Ok(piece)
         } else {
             Err(anyhow!(
