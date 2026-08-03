@@ -41,7 +41,7 @@ impl Downloader {
         let shared_buffer = Arc::new(Mutex::new(vec![0u8; total_length]));
         let torrent_info = Arc::new(self.torrent.info.clone());
 
-        let mut interval = time::interval(Duration::from_secs(1));
+        let mut sleep = Box::pin(time::sleep(Duration::from_secs(0)));
         let mut active_tasks = JoinSet::new();
 
         info!(
@@ -59,7 +59,7 @@ impl Downloader {
             }
 
             tokio::select! {
-                _ = interval.tick() => {
+                _ = &mut sleep  => {
 
                     let discovery = self.discoverer.discover(&self.torrent).await.unwrap_or_else(|e| {
                         info!("Discovery service threw an error: {}", e);
@@ -70,7 +70,8 @@ impl Downloader {
 
                     discovery.peers.iter().for_each(|p| info!("{}", p));
 
-                    interval = time::interval(Duration::from_secs(discovery.interval as u64));
+                    // TODO: Dedup peers across discovery rounds
+                    sleep = Box::pin(time::sleep(Duration::from_secs(discovery.interval as u64)));
 
                     for mut peer in discovery.peers {
 
