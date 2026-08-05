@@ -51,8 +51,7 @@
   )[
     #text(weight: "bold", fill: rgb("#5a3a6f"))[Beispiel] \
     #content
-  ]
-]
+  ] ]
 
 #let note(content) = [
   #block(
@@ -167,17 +166,29 @@ In peer-to-peer networks, piece selection directly impacts performance as descri
 ) <fig-bittorrent-protocol>
 
 = Quick Overview of the BitTorrent Protocol
+This doesnt serve as a complete spec of the BitTorrent protocol but rather as clarification of terminoligy I am using thorught this paper. To know how the portocol works please sight this source: // TODO add bep source
 
-As shown in @fig-bittorrent-protocol, control flow cycles between block transfers and peer re-selection
+As shown in @fig-bittorrent-protocol, control flow cycles between block transfers and peer re-selection, this can of course be done over multiple peers and pieces simultaneasly, tremendously speeding up execution time.
+
+As for the purpose of this paper the protocol deals with 4 moving pieces. 1. The `.torrent` files or magnet links you source from your favorite websites for "linux isos", 2. The trackers that are listed in said sources from which u get - 3. the peers and 4. the Pieces.
+
+#theorem("Tracker Sources")[
+  Trackers can be sourced from a multitude of sources, most commonly one would use a `.torrent` file or a Magnet link, both do more or less the same thing its just a different encoding method. To keep up with the decentralized spirit of BitTorrent a method using a DHT("Distributed Hash Table") has been deviced (TODO source). Since where to get trackers doesnt really impact our study this will be completely ignored.
+]
+
+#theorem("Tracker")[
+  Trackers are used to get peers from which you can download from. There are  multiple tracker protocols, most commonly HTTP/S, UDP and WSS. You announce yourself to the tracker so join the swarm and it will give you a list of Peers.
+]
 
 
 
+#theorem("Peer")[
+  A peer is a node in the swarm that we can request pieces from. To talk to a peer you first have to perform a handshake and after which you will have informaiton about which pieces of the data the swarm holds the peer has available. Based on this you can request pieces from it.
+]
 
-
-== The difference between DHT and Tracker
-== _.torrent_ files and magnet links
-== info_hash
-== Clients and Pieces
+#theorem("Piece")[
+  A piece is a small portion of a file, split into multiple parts for the purpose of transportation. All Pieces are the same length, the last piece might not be tho. Every piece has a sha1 hash associated to it for verification. In the case of multi file torrents a file can be split across multiple pieces and one piece can hold the end and start of subsequent files. This is important should we choose to value downloading finished files for example.
+]
 
 The actual peer- and piece selection algorithms used by the BitTorrent protocl are random peer selection and a 4 phase piece selection algorithm as mentioned in @cohen2003bittorrent[p. 3, 2.4].
 
